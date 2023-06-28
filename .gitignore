@@ -1,2 +1,11 @@
-*.sw[lmnop]
+bak
+
 venv
+__pycache__
+meve_cache
+eve_universe_names
+eve_name_id_iso_cache
+
+graph.pkl
+
+*.sw[lmnop]
