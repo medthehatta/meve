@@ -2,6 +2,8 @@ import itertools
 import json
 import diskcache
 
+import requests
+
 from hxxp import DefaultHandlers
 
 
@@ -153,3 +155,11 @@ def station_lookup(universe, name):
     else:
         raise LookupError(name)
 
+
+def blueprint_lookup(entity_id):
+    return _json(
+        requests.get(
+            "https://www.fuzzwork.co.uk/blueprint/api/blueprint.php",
+            params={"typeid": entity_id},
+        )
+    )

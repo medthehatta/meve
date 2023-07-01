@@ -74,6 +74,7 @@ def read_types(path="types.json"):
 
 from universe import ItemFactory
 from universe import UniverseLookup
+from universe import blueprint_lookup
 
 
 requester = Requester("https://esi.evetech.net/latest/", EmptyToken())
