@@ -139,8 +139,12 @@ def plot(
         in groupby(lambda x: type(x).__name__, procedure).items()
     }
 
+    print("")
+
     for (kind, total) in costs.items():
-        print(f"{kind} cost: {total:,}")
+        print(f"{kind.lower()} cost: {total:,}")
+
+    print("")
 
     for entry in procedure:
         if isinstance(entry, Purchase):
