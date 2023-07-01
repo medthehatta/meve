@@ -1,4 +1,5 @@
 click
 cytoolz
 diskcache
+networkx
 requests
