@@ -1,4 +1,5 @@
 import re
+import json
 
 import click
 from cytoolz import groupby
@@ -56,6 +57,33 @@ def parse_recipe_lines(lines):
 @click.group()
 def cli():
     """Plot routes through New Eden to buy materials."""
+
+
+@cli.command()
+@click.option("-b", "--brief", is_flag=True)
+@click.argument("kind")
+@click.argument("name")
+def universe(name, brief, kind):
+    requester = Requester("https://esi.evetech.net/latest/", EmptyToken())
+    universe = UniverseLookup(requester)
+    if brief:
+        print(universe.from_name(name))
+    else:
+        print(json.dumps(universe.details(kind, name=name)))
+
+
+@cli.command()
+@click.option("-b", "--brief", is_flag=True)
+@click.argument("terms")
+def item(terms, brief):
+    requester = Requester("https://esi.evetech.net/latest/", EmptyToken())
+    universe = UniverseLookup(requester)
+    items = ItemFactory(requester, "types.json")
+    item = items.from_terms(terms)
+    if brief:
+        print(item)
+    else:
+        print(json.dumps(universe.details("type", entity_id=item.id)))
 
 
 @cli.command()
