@@ -1,3 +1,5 @@
+import itertools
+import json
 import re
 import json
 
@@ -11,6 +13,8 @@ from purchase_tour import Purchase
 from purchase_tour import Travel
 # FIXME: should maybe move this
 from purchase_tour import load_system_graph
+from purchase_tour import markets_inventories
+from purchase_tour import iter_sell_orders
 from universe import ItemFactory
 from universe import UniverseLookup
 from universe import station_lookup
@@ -177,6 +181,54 @@ def plot(
     for entry in procedure:
         if isinstance(entry, Purchase):
             print(entry.format(universe))
+
+
+@cli.command()
+@click.option(
+    "-r",
+    "--region",
+    default=DEFAULT_REGION_NAMES,
+    multiple=True,
+)
+@click.argument("items", type=click.File("r"))
+def sell_orders(region, items):
+    # Better name for the variable
+    region_names = region
+
+    desired = parse_recipe_lines(items)
+
+    requester = Requester("https://esi.evetech.net/latest/", EmptyToken())
+    universe = UniverseLookup(requester)
+
+    region_ids = [
+        universe.from_name(region_name).id for region_name in region_names
+    ]
+
+    items = ItemFactory(requester, "types.json")
+
+    required = {
+        (amount, items.from_terms(fuzzy_name).id)
+        for (amount, fuzzy_name) in desired
+    }
+    required_ids = {item_id for (_, item_id) in required}
+
+    market_entries = itertools.chain.from_iterable(
+        itertools.chain.from_iterable(
+            iter_sell_orders(requester, region_id, int(item_id))
+            for region_id in region_ids
+        )
+        for item_id in required_ids
+    )
+
+    for entry in market_entries:
+        entry1 = {
+            "item": universe.from_id(entry["type_id"]).name,
+            "system": universe.from_id(entry["system_id"]).name,
+            "station": universe.from_id(entry["location_id"]).name,
+            "price": entry["price"],
+            "volume": entry["volume_remain"],
+        }
+        print(json.dumps(entry1))
 
 
 if __name__ == "__main__":
