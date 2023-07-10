@@ -49,9 +49,14 @@ def parse_recipe_lines(lines):
         if line.startswith("#"):
             continue
         match = re.search(r"^(\d+(?:[.]\d*)?)\s+(.+)\s*$", line)
+        match_no_num = re.search(r"^(.+)\s*$", line)
         if match:
             count = float(match.group(1))
             item = match.group(2).lower()
+            components[item] = components.get(item, 0) + count
+        elif match_no_num:
+            count = 1
+            item = match_no_num.group(1).lower()
             components[item] = components.get(item, 0) + count
         else:
             print(f"No match: '{line}'")
