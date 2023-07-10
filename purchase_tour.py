@@ -306,10 +306,11 @@ def optimize_purchase(
     end_position = end_position or start_position
 
     timer.checkpoint("Reformat desired entities")
-    required = {
-        (amount, items.from_terms(fuzzy_name).id)
-        for (amount, fuzzy_name) in desired
-    }
+    required_tally = {}
+    for (amount, fuzzy_name) in desired:
+        item_id = items.from_terms(fuzzy_name).id
+        required_tally[item_id] = required_tally.get(item_id, 0) + amount
+    required = {(amount, id_) for (id_, amount) in required_tally.items()}
     required_ids = {item_id for (_, item_id) in required}
 
     timer.checkpoint("Fetch relevant market data")
