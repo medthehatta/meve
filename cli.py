@@ -18,6 +18,7 @@ from purchase_tour import iter_sell_orders
 from universe import ItemFactory
 from universe import UniverseLookup
 from universe import station_lookup
+from universe import blueprint_lookup
 
 
 TIME_COSTS = {
@@ -229,6 +230,32 @@ def sell_orders(region, items):
             "volume": entry["volume_remain"],
         }
         print(json.dumps(entry1))
+
+
+@cli.command()
+@click.option("-s", "--summary", is_flag=True)
+@click.option("-b", "--line-break", is_flag=True)
+@click.argument("item")
+def blueprint(summary, line_break, item):
+    desired = next(iter(parse_recipe_lines([f"1 {item}"])))
+
+    requester = Requester("https://esi.evetech.net/latest/", EmptyToken())
+    items = ItemFactory(requester, "types.json")
+
+    desired_id = items.from_terms(desired[-1]).id
+
+    bp = blueprint_lookup(desired_id)
+
+    if summary or line_break:
+        mats = bp["activityMaterials"]["1"]
+        if line_break:
+            delim = "\n"
+        else:
+            delim = " + "
+        s = delim.join(f"{m['quantity']} {m['name']}" for m in mats)
+        print(s)
+    else:
+        print(json.dumps(bp))
 
 
 if __name__ == "__main__":
