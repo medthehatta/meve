@@ -17,7 +17,7 @@ class Entity:
         self.name = name
 
     def __repr__(self):
-        return f"{self.name} [id: {self.id}]"
+        return f"{self.name or '???'} [id: {self.id or '???'}]"
 
 
 class ItemFactory:
@@ -103,13 +103,15 @@ class UniverseLookup:
                 found[id_] = self.cache.get(("id", id_))
         missing = list(set(id_ for id_ in ids if id_ not in found))
         if missing:
-            entries = _json(
-                self.requester.request(
-                    "POST",
-                    "/universe/names",
-                    json=missing,
-                )
+            res = self.requester.request(
+                "POST",
+                "/universe/names",
+                json=missing,
             )
+            if not res.ok:
+                entries = [{"id": id_, "name": None} for id_ in missing]
+            else:
+                entries = _json(res)
 
             if isinstance(entries, (list, tuple)):
                 seq = entries
@@ -147,10 +149,10 @@ def station_lookup(universe, name):
         data = universe.details("station", name=name)
         return (data["system_id"], data["station_id"])
 
-    except KeyError:
+    except (KeyError, requests.exceptions.HTTPError):
         data = universe.details("system", name=name)
         # Pick just any station in the system
-        return (data["system_id"], next(data["stations"]))
+        return (data["system_id"], next(iter(data["stations"])))
 
     else:
         raise LookupError(name)
@@ -163,3 +165,132 @@ def blueprint_lookup(entity_id):
             params={"typeid": entity_id},
         )
     )
+
+
+UNSET = object()
+
+class UserAssets:
+
+    def __init__(self, requester, character_name):
+        self.requester = requester
+        self.character_name = character_name
+        self.cache = diskcache.Cache("user_assets")
+        self._character_id = None
+
+    @property
+    def character_id(self):
+        if self._character_id is None:
+            data = _json(
+                self.requester.request(
+                    "POST",
+                    "/universe/ids",
+                    json=[self.character_name],
+                )
+            )
+            found = data["characters"]
+            if len(found) == 1:
+                self._character_id = data["characters"][0]["id"]
+            else:
+                raise LookupError(f"Expected one match but got: {found}")
+        return self._character_id
+
+    def key(self, type_id):
+        return ("smartavgbuy", self.character_id, type_id)
+
+    def last_key(self):
+        return ("smartavgbuy_last", self.character_id)
+
+    def smart_avg_buy(self, type_id, default=UNSET):
+        if self.key(type_id) in self.cache:
+            return self.cache.get(self.key(type_id))
+        elif default is UNSET:
+            raise LookupError(type_id)
+        else:
+            return default
+
+    def update_smart_avg_buy(self):
+        last = self.cache.get(self.last_key(), default="")
+        new_purchases = self.purchases(since=last)
+        new_avgs = self._average_purchase_prices(new_purchases)
+        new_amts = self._total_quantities(new_purchases)
+        current_quantities = self.total_quantities()
+
+        for k in new_avgs:
+            avg_price = new_avgs[k]
+            quantity = new_amts[k]
+            if (
+                current_quantities.get(k, 0)
+                and current_quantities[k] > quantity
+                and self.key(k) in self.cache
+            ):
+                total_spend = (
+                    quantity*avg_price
+                    + (current_quantities[k] - quantity)*self.smart_avg_buy(k)
+                )
+                self.cache.set(
+                    self.key(k),
+                    total_spend / current_quantities[k],
+                )
+            else:
+                self.cache.set(
+                    self.key(k),
+                    avg_price,
+                )
+        self.cache.set(
+            self.key_last(),
+            max(p["date"] for p in new_purchases),
+        )
+
+    def total_quantities(self):
+        data = _json(
+            self.requester.request("GET", f"/characters/{self.character_id}/assets")
+        )
+        return self._total_quantities(data)
+
+    def transactions(self):
+        data = _json(
+            self.requester.request(
+                "GET",
+                f"/characters/{self.character_id}/wallet/transactions",
+            )
+        )
+        return data
+
+    def purchases(self, since=None, until=None):
+        transactions = self.transactions()
+        return [
+            {
+                "date": x["date"],
+                "type_id": x["type_id"],
+                "quantity": x["quantity"],
+                "unit_price": x["unit_price"],
+            }
+            for x in transactions
+            if (
+                x["is_buy"] 
+                and (x["date"] >= since if since else True)
+                and (x["date"] <= until if until else True)
+            )
+        ]
+
+    def _average_purchase_prices(self, purchases):
+        acquired = {}
+        spent = {}
+        for purchase in purchases:
+            type_id = purchase["type_id"]
+            acquired[type_id] = acquired.get(type_id, 0) + purchase["quantity"]
+            spent[type_id] = (
+                spent.get(type_id, 0)
+                + purchase["quantity"]*purchase["unit_price"]
+            )
+        avg = {k: spent[k] / acquired[k] for k in acquired}
+        return avg
+
+    def _total_quantities(self, entries):
+        acquired = {}
+        for entry in entries:
+            type_id = entry["type_id"]
+            acquired[type_id] = acquired.get(type_id, 0) + entry["quantity"]
+        return acquired
+
+

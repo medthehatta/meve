@@ -62,12 +62,14 @@ class State:
         self,
         graph,
         markets,
+        best_prices,
         position,
         required=None,
         move_cost_per_second=4160,
     ):
         self.graph = graph
         self.markets = markets
+        self.best_prices = best_prices
         self.position = position
         self.required = required if required is not None else set([])
         self.move_cost_per_second = move_cost_per_second
@@ -88,6 +90,7 @@ class State:
         defaults = {
             "graph": self.graph,
             "markets": self.markets,
+            "best_prices": self.best_prices,
             "move_cost_per_second": self.move_cost_per_second,
             "position": self.position,
             "required": self.required,
@@ -118,6 +121,7 @@ class State:
             if (
                 self.position not in self.markets
                 or item not in self.markets[self.position]
+                or self.markets[self.position][item]["volume_remain"] < amount
             ):
                 continue
             cost = amount * self.markets[self.position][item]["price"]
@@ -134,13 +138,19 @@ class State:
             yield (transition, state, cost)
 
     def heuristic(self, goal):
-        # This heuristic should just be a sum of the minimum costs remaining
-        # for everything, with jump cost omitted.
-        #
-        # For now the search is so quick I don't even need a heuristic, so we
-        # just return 0 which makes this do a full best-first search.
-        #
         return 0
+        # This performs WORSE than just not putting a heuristic in
+        min_buy_cost = sum(
+            amount * self.best_prices[item]
+            for (amount, item) in self.required
+        )
+        min_path = nx.shortest_path(self.graph, self.position, goal.position)
+        path_seconds = sum(
+            self.graph.get_edge_data(a, b)["weight"]
+            for (a, b) in zip(min_path, min_path[1:])
+        )
+        travel_cost = path_seconds*self.move_cost_per_second
+        return min_buy_cost + travel_cost
 
 
 # FIXME: should maybe move this
@@ -153,9 +163,9 @@ def load_system_graph(path):
     return graph
 
 
-def get_sell_orders(r, region_id, type_id=None, page=1):
+def get_orders(r, query, region_id, type_id=None, page=1):
     params = {
-        "order_type": "sell",
+        **query,
         "page": page,
     }
 
@@ -165,12 +175,13 @@ def get_sell_orders(r, region_id, type_id=None, page=1):
     return _json(r.request("GET", f"/markets/{region_id}/orders", params=params))
 
 
-def iter_sell_orders(r, region_id, type_id=None):
+def iter_orders(r, query, region_id, type_id=None):
     page = 1
     while True:
         try:
-            yield from get_sell_orders(
+            yield from get_orders(
                 r,
+                query,
                 region_id=region_id,
                 type_id=type_id,
                 page=page,
@@ -194,10 +205,45 @@ def get_route(system_graph, first, last):
         return _routes[(first, last)]
 
 
+def orders_by_item(requester, region_ids, item_ids):
+    market_entries = itertools.chain.from_iterable(
+        itertools.chain.from_iterable(
+            iter_orders(
+                requester,
+                {"order_type": "all"},
+                region_id,
+                int(item_id),
+            )
+            for region_id in region_ids
+        )
+        for item_id in item_ids
+    )
+
+    orders = {}
+
+    for entry in market_entries:
+        what = entry["type_id"]
+        where = entry["location_id"]
+
+        if what not in orders:
+            orders[what] = {where: [entry]}
+        elif where not in orders[what]:
+            orders[what][where] = [entry]
+        else:
+            orders[what][where].append(entry)
+
+    return orders
+
+
 def markets_inventories(requester, region_ids, item_ids):
     market_entries = itertools.chain.from_iterable(
         itertools.chain.from_iterable(
-            iter_sell_orders(requester, region_id, int(item_id))
+            iter_orders(
+                requester,
+                {"order_type": "sell"},
+                region_id,
+                int(item_id),
+            )
             for region_id in region_ids
         )
         for item_id in item_ids
@@ -228,6 +274,18 @@ def markets_inventories(requester, region_ids, item_ids):
             )
 
     return (markets, inventories)
+
+
+def min_inventory_prices(inventory):
+    min_prices = {}
+    for location in inventory:
+        for item in inventory[location]:
+            if (
+                item not in min_prices or
+                inventory[location][item]["price"] < min_prices[item]
+            ):
+                min_prices[item] = inventory[location][item]["price"]
+    return min_prices
 
 
 def compute_graph(system_graph, markets):
@@ -320,6 +378,8 @@ def optimize_purchase(
         required_ids,
     )
 
+    best_prices = min_inventory_prices(inventories)
+
     # Make sure we have the start position in here so we can plot a route from
     # there, ditto end position
     markets.add(start_position)
@@ -332,6 +392,7 @@ def optimize_purchase(
     initial = State(
         g,
         inventories,
+        best_prices=best_prices,
         position=start_position,
         required=required,
         move_cost_per_second=cost_per_second,
@@ -339,6 +400,7 @@ def optimize_purchase(
     final = State(
         g,
         inventories,
+        best_prices=best_prices,
         position=end_position,
         required=set([]),
         move_cost_per_second=cost_per_second,
@@ -350,6 +412,7 @@ def optimize_purchase(
         final,
         State.neighbors,
         State.heuristic,
+        trace=timer.checkpoint,
     )
 
     timer.checkpoint("Complete")
