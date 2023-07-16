@@ -3,12 +3,14 @@ import json
 import pickle
 from pprint import pprint
 import itertools
+import time
 
 import networkx as nx
 
 from hxxp import Requester
 from hxxp import DefaultHandlers
 from authentication import EmptyToken
+import authentication as auth
 
 
 
@@ -50,117 +52,49 @@ def dump_pickle(data, path):
         return pickle.dump(data, f)
 
 
-def get_regions(r):
-    return _json(r.request("GET", "/universe/regions/"))
 
 
-def get_region(r, region_id):
-    return _json(r.request("GET", f"/universe/regions/{region_id}"))
 
 
-def read_regions(path="regions.json"):
-    with open(path) as f:
-        return json.load(f)
+client_id = "2ca75dd163354b0794cca4726d631df4"
+client_secret = "eHwPGFnA99aGu784pJBqv3U7mi9t6IfaNbkUmoKN"
 
+tok = auth.EveOnlineFlow(
+    "https://login.eveonline.com/v2/oauth/token",
+    client_id=client_id,
+    client_secret=client_secret,
+    scopes=[
+        "esi-wallet.read_character_wallet.v1",
+        "esi-wallet.read_corporation_wallet.v1",
+        "esi-assets.read_assets.v1",
+        "esi-markets.structure_markets.v1",
+        "esi-markets.read_character_orders.v1",
+        "esi-wallet.read_corporation_wallets.v1",
+        "esi-assets.read_corporation_assets.v1",
+        "esi-markets.read_corporation_orders.v1",
+    ],
+    code_fetcher=auth.get_code_http(8080),
+)
+if os.path.exists("token.pkl"):
+    token_data = slurp_pickle("token.pkl")
+    tok.tokens = token_data["tokens"]
+    tok.expire_time = token_data["expire_time"]
+    tok.refresh_expire_time = token_data["refresh_expire_time"]
+tok.get()
+dump_pickle(
+    {
+        "tokens": tok.tokens,
+        "expire_time": tok.expire_time,
+        "refresh_expire_time": tok.refresh_expire_time,
+    },
+    "token.pkl",
+)
 
-def read_types(path="types.json"):
-    with open(path) as f:
-        return json.load(f)
+r0 = Requester("https://esi.evetech.net/latest/", EmptyToken())
+r = Requester("https://esi.evetech.net/latest/", tok)
 
-
-#
-# Entry point
-# 
-
-from universe import ItemFactory
+from universe import UserAssets
 from universe import UniverseLookup
-from universe import blueprint_lookup
 
-
-requester = Requester("https://esi.evetech.net/latest/", EmptyToken())
-universe = UniverseLookup(requester)
-
-verge_vendor = 10000068
-sinq_laison = 10000032
-syndicate = 10000041
-molden_heath = 10000028
-placid = 10000048
-essence = 10000064
-
-chill_time_cost = 900
-sweaty_time_cost = 4160
-
-
-# Loes V - Moon 19 - Roden Shipyards Warehouse
-start_position = (30005300, 60010363)
-regions = [verge_vendor, essence, placid]
-
-
-# desired = {
-#     (1, "small processor overclocking unit i"),
-#     (1, "1mn y-s8 compact afterburner"),
-#     (1, "damage control i"),
-#     (1, "small cap battery i"),
-#     (1, "small i-a enduring armor repairer"),
-#     (1, "drone damage amplifier i"),
-#     (1, "small capacitor control circuit i"),
-#     (1, "small transverse bulkhead i"),
-#     (1, "f-12 enduring tracking computer"),
-#     (5, "125mm prototype gauss gun"),
-# }
-
-# desired = {
-#     (11, "tritanium"),
-#     (12, "pyerite"),
-#     (5, "nocxium"),
-#     (28, "mexallon"),
-#     (11, "isogen"),
-# }
-
-
-# desired = {
-#     (400, "burned logic circuit"),
-#     (300, "thruster console"),
-#     (300, "charred micro circuit"),
-# }
-
-
-# desired = {
-#     (100, "impetus console"),
-#     (100, "logic circuit"),
-#     (100, "micro circuit"),
-#     (3600, "nocxium"),
-#     (8200, "isogen"),
-#     (22200, "mexallon"),
-#     (55600, "tritanium"),
-#     (44400, "pyerite"),
-# }
-
-
-desired = {
-    (1, "plasma command center"),
-}
-
-
-# desired = {
-#     (1, "lava command center"),
-# }
-
-
-
-# time_cost = chill_time_cost
-time_cost = sweaty_time_cost
-
-
-items = ItemFactory(requester, "types.json")
-
-
-graph_data = slurp_pickle("graph.pkl")
-
-g = nx.Graph()
-
-for edge in graph_data["edges"]:
-    g.add_edge(*edge)
-
-
-
+universe = UniverseLookup(r0)
+ua = UserAssets(r, "Mola Pavonis")
