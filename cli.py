@@ -14,7 +14,7 @@ from purchase_tour import Travel
 # FIXME: should maybe move this
 from purchase_tour import load_system_graph
 from purchase_tour import markets_inventories
-from purchase_tour import iter_sell_orders
+from purchase_tour import iter_orders
 from universe import ItemFactory
 from universe import UniverseLookup
 from universe import station_lookup
@@ -31,11 +31,11 @@ DEFAULT_REGION_NAMES = [
     "Verge Vendor",
     "Placid",
     "Essence",
+    "Sinq Laison",
 ]
 
-DEFAULT_START_STATION_NAME = "Loes V - Moon 19 - Roden Shipyards Warehouse"
-
-DEFAULT_END_STATION_NAME = "Loes V - Moon 19 - Roden Shipyards Warehouse"
+DEFAULT_START_STATION_NAME = "Cistuvaert V - AIR Laboratories"
+DEFAULT_END_STATION_NAME = "Cistuvaert V - AIR Laboratories"
 
 DEFAULT_SWEAT_LEVEL = "medium"
 
@@ -66,7 +66,7 @@ def parse_recipe_lines(lines):
 
 @click.group()
 def cli():
-    """Plot routes through New Eden to buy materials."""
+    """Some EVE helpers."""
 
 
 @cli.command()
@@ -101,13 +101,11 @@ def item(terms, brief):
     "-s",
     "--start-station",
     "--start",
-    default=DEFAULT_START_STATION_NAME,
 )
 @click.option(
     "-e",
     "--end-station",
     "--end",
-    default=DEFAULT_END_STATION_NAME,
 )
 @click.option(
     "-r",
@@ -148,8 +146,18 @@ def plot(
     requester = Requester("https://esi.evetech.net/latest/", EmptyToken())
     universe = UniverseLookup(requester)
 
-    start_position = station_lookup(universe, start_station)
-    end_position = station_lookup(universe, end_station)
+    if start_station is None and end_station is None:
+        start_position = station_lookup(universe, DEFAULT_START_STATION_NAME)
+        end_position = station_lookup(universe, DEFAULT_END_STATION_NAME)
+    elif start_station is None:
+        end_position = station_lookup(universe, DEFAULT_END_STATION_NAME)
+        start_position = end_position
+    elif end_station is None:
+        start_position = station_lookup(universe, DEFAULT_START_STATION_NAME)
+        end_position = start_position
+    else:
+        start_position = station_lookup(universe, start_station)
+        end_position = station_lookup(universe, end_station)
 
     regions = [
         universe.from_name(region_name).id for region_name in region_names
@@ -191,13 +199,18 @@ def plot(
 
 @cli.command()
 @click.option(
+    "-t",
+    "--order-type",
+    default="sell",
+)
+@click.option(
     "-r",
     "--region",
     default=DEFAULT_REGION_NAMES,
     multiple=True,
 )
 @click.argument("items", type=click.File("r"))
-def sell_orders(region, items):
+def orders(region, order_type, items):
     # Better name for the variable
     region_names = region
 
@@ -220,7 +233,12 @@ def sell_orders(region, items):
 
     market_entries = itertools.chain.from_iterable(
         itertools.chain.from_iterable(
-            iter_sell_orders(requester, region_id, int(item_id))
+            iter_orders(
+                requester,
+                {"order_type": order_type.lower()},
+                region_id,
+                int(item_id),
+            )
             for region_id in region_ids
         )
         for item_id in required_ids
