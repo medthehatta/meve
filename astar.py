@@ -1,4 +1,5 @@
 from queue import PriorityQueue
+import time
 
 
 class QueueItem:
@@ -26,6 +27,7 @@ def state_astar(
     final,
     neighbors_of: callable,
     heuristic: callable,
+    trace: callable = None,
 ):
     fringe = PriorityQueue()
     best_known_cost_to = {}
@@ -35,9 +37,25 @@ def state_astar(
     best_known_cost_to[initial] = 0
     fringe.put(QueueItem(heuristic(initial, final), initial))
 
-    while fringe.qsize():
+    fringe_size = fringe.qsize()
+    trace_timer = time.time()
+    trace_interval_seconds = 10
+
+    while fringe_size:
         entry = fringe.get(block=False)
         current = entry.item
+
+        if (
+            trace and time.time() - trace_timer > trace_interval_seconds
+        ):
+            trace(
+                f"Search progress: "
+                f"heuristic={entry.priority} "
+                f"cost={best_known_cost_to[current]} "
+                f"[{current}] "
+                f"({fringe_size=})"
+            )
+            trace_timer = time.time()
 
         if current == final:
             return (
@@ -59,6 +77,8 @@ def state_astar(
                 transition_list[n] = transition
                 if n not in [x.item for x in fringe.queue]:
                     fringe.put(QueueItem(found_cost + heuristic(n, final), n))
+
+        fringe_size = fringe.qsize()
 
     # If we exhausted all our options, there is no route
     raise RuntimeError("No route")
