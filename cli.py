@@ -14,7 +14,7 @@ from purchase_tour import Travel
 # FIXME: should maybe move this
 from purchase_tour import load_system_graph
 from purchase_tour import markets_inventories
-from purchase_tour import iter_orders
+from purchase_tour import orders_in_regions
 from universe import ItemFactory
 from universe import UniverseLookup
 from universe import station_lookup
@@ -201,7 +201,7 @@ def plot(
 @click.option(
     "-t",
     "--order-type",
-    default="sell",
+    default="all",
 )
 @click.option(
     "-r",
@@ -231,26 +231,21 @@ def orders(region, order_type, items):
     }
     required_ids = {item_id for (_, item_id) in required}
 
-    market_entries = itertools.chain.from_iterable(
-        itertools.chain.from_iterable(
-            iter_orders(
-                requester,
-                {"order_type": order_type.lower()},
-                region_id,
-                int(item_id),
-            )
-            for region_id in region_ids
-        )
-        for item_id in required_ids
-    )
+    market_entries = orders_in_regions(requester, region_ids, required_ids)
 
     for entry in market_entries:
+        if order_type == "buy" and not entry["is_buy_order"]:
+            continue
+        elif order_type == "sell" and entry["is_buy_order"]:
+            continue
+
         entry1 = {
             "item": universe.from_id(entry["type_id"]).name,
             "system": universe.from_id(entry["system_id"]).name,
             "station": universe.from_id(entry["location_id"]).name,
             "price": entry["price"],
             "volume": entry["volume_remain"],
+            "kind": "buy" if entry["is_buy_order"] else "sell",
         }
         print(json.dumps(entry1))
 

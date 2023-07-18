@@ -205,8 +205,8 @@ def get_route(system_graph, first, last):
         return _routes[(first, last)]
 
 
-def orders_by_item(requester, region_ids, item_ids):
-    market_entries = itertools.chain.from_iterable(
+def orders_in_regions(requester, region_ids, item_ids):
+    return itertools.chain.from_iterable(
         itertools.chain.from_iterable(
             iter_orders(
                 requester,
@@ -219,6 +219,8 @@ def orders_by_item(requester, region_ids, item_ids):
         for item_id in item_ids
     )
 
+
+def orders_by_item(market_entries):
     orders = {}
 
     for entry in market_entries:
@@ -231,6 +233,23 @@ def orders_by_item(requester, region_ids, item_ids):
             orders[what][where] = [entry]
         else:
             orders[what][where].append(entry)
+
+    return orders
+
+
+def orders_by_location(market_entries):
+    orders = {}
+
+    for entry in market_entries:
+        what = entry["type_id"]
+        where = entry["location_id"]
+
+        if where not in orders:
+            orders[where] = {what: [entry]}
+        elif what not in orders[where]:
+            orders[where][what] = [entry]
+        else:
+            orders[where][what].append(entry)
 
     return orders
 
