@@ -5,6 +5,7 @@ import diskcache
 import requests
 
 from hxxp import DefaultHandlers
+from formal_vector import FormalVector
 
 
 _json = DefaultHandlers.raise_or_return_json
@@ -18,6 +19,11 @@ class Entity:
 
     def __repr__(self):
         return f"{self.name or '???'} [id: {self.id or '???'}]"
+
+
+class Ingredients(FormalVector):
+
+    _ZERO = "Ingredients.NONE"
 
 
 class ItemFactory:
@@ -56,6 +62,64 @@ class ItemFactory:
 
     def from_id(self, entity_id):
         return self.type_repo_rev[int(entity_id)]
+
+
+class BlueprintLookup:
+
+    def __init__(self, items):
+        self.items = items
+        self.cache = diskcache.Cache("eve_blueprints")
+
+    def lookup(
+        self,
+        entity=None,
+        entity_id=None,
+        entity_terms=None,
+        entity_name=None,
+    ):
+        if entity:
+            entity_id = entity.id
+        elif entity_id:
+            entity_id = entity_id
+        elif entity_terms:
+            entity_id = self.items.from_terms(entity_terms).id
+        elif entity_name:
+            entity_id = self.items.from_name(entity_name).id
+        else:
+            raise ValueError("Must provide an argument!")
+
+        if entity_id not in self.cache:
+            result = _json(
+                requests.get(
+                    "https://www.fuzzwork.co.uk/blueprint/api/blueprint.php",
+                    params={"typeid": entity_id},
+                )
+            )
+            self.cache.set(entity_id, result)
+
+        return self.cache.get(entity_id)
+
+    def ingredients(
+        self,
+        entity=None,
+        entity_id=None,
+        entity_terms=None,
+        entity_name=None,
+    ):
+        data = self.lookup(
+            entity=entity,
+            entity_id=entity_id,
+            entity_terms=entity_terms,
+            entity_name=entity_name,
+        )
+
+        if "activityMaterials" not in data:
+            return Ingredients.zero()
+
+        return Ingredients.from_triples(
+            (x["name"], x["quantity"], x["typeid"])
+            for x in data["activityMaterials"]["1"]
+        )
 
 
 class UniverseLookup:
@@ -158,15 +222,6 @@ def station_lookup(universe, name):
         raise LookupError(name)
 
 
-def blueprint_lookup(entity_id):
-    return _json(
-        requests.get(
-            "https://www.fuzzwork.co.uk/blueprint/api/blueprint.php",
-            params={"typeid": entity_id},
-        )
-    )
-
-
 UNSET = object()
 
 class UserAssets:
@@ -267,7 +322,7 @@ class UserAssets:
             }
             for x in transactions
             if (
-                x["is_buy"] 
+                x["is_buy"]
                 and (x["date"] >= since if since else True)
                 and (x["date"] <= until if until else True)
             )
@@ -292,5 +347,3 @@ class UserAssets:
             type_id = entry["type_id"]
             acquired[type_id] = acquired.get(type_id, 0) + entry["quantity"]
         return acquired
-
-
