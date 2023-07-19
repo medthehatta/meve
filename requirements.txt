@@ -3,3 +3,4 @@ cytoolz
 diskcache
 networkx
 requests
+formal-vector @ git+https://github.com/medthehatta/formal-vector
