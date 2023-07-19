@@ -9,10 +9,16 @@ import time
 import networkx as nx
 from cytoolz import get_in
 
+from formal_vector import FormalVector
 from hxxp import Requester
 from hxxp import DefaultHandlers
 from authentication import EmptyToken
 import authentication as auth
+
+
+class Ingredients(FormalVector):
+
+    _ZERO = "Ingredients.NONE"
 
 
 
@@ -99,7 +105,7 @@ r = Requester("https://esi.evetech.net/latest/", tok)
 from universe import UserAssets
 from universe import UniverseLookup
 from universe import ItemFactory
-from universe import blueprint_lookup
+from universe import BlueprintLookup
 from purchase_tour import orders_by_location
 from purchase_tour import orders_by_item
 from purchase_tour import orders_in_regions
@@ -109,6 +115,7 @@ from delayed import Delayed
 
 universe = UniverseLookup(r0)
 items = ItemFactory(r0, "types.json")
+blueprints = BlueprintLookup(items)
 ua = UserAssets(r, "Mola Pavonis")
 
 
@@ -140,11 +147,26 @@ DEFAULT_LOCATION_IDS = [
 ]
 
 
+class CraftingPrices:
+
+    def __init__(self, blueprints, user_assets):
+        self.blueprints = blueprints
+        self.user_assets = user_assets
+
+    def smart_avg_crafting_price(self, item_id):
+        return sum(
+            amt * self.user_assets.smart_avg_buy(ing_id)
+            for (amt, ing_id) in self.blueprints.ingredients(
+                entity_id=item_id,
+            )
+        )
+
+
 # TODO: Add caching; generally reduce reliance on making API calls
-def minimum_crafted_sell_price(item_id, multiplier=1.2):
+def minimum_crafted_sell_price(blueprints, item_id, multiplier=1.2):
     return multiplier*sum(
-        x["quantity"] * ua.smart_avg_buy(x["typeid"])
-        for x in blueprint_lookup(item_id)["activityMaterials"]["1"]
+        amt * ua.smart_avg_buy(entity_id)
+        for (amt, entity_id) in blueprints.ingredients(entity_id=item_id)
     )
 
 
