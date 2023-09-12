@@ -4,6 +4,8 @@ import pickle
 import diskcache
 import networkx as nx
 from requests.exceptions import HTTPError
+from cytoolz import groupby
+from cytoolz import topk
 
 from hxxp import DefaultHandlers
 
@@ -205,18 +207,42 @@ def get_route(system_graph, first, last):
         return _routes[(first, last)]
 
 
+def orders_for_item(requester, region_ids, item_id):
+    return itertools.chain.from_iterable(
+        iter_orders(
+            requester,
+            {"order_type": "all"},
+            region_id,
+            int(item_id),
+        )
+        for region_id in region_ids
+    )
+
+
 def orders_in_regions(requester, region_ids, item_ids):
     return itertools.chain.from_iterable(
-        itertools.chain.from_iterable(
-            iter_orders(
-                requester,
-                {"order_type": "all"},
-                region_id,
-                int(item_id),
-            )
-            for region_id in region_ids
-        )
+        orders_for_item(requester, region_ids, item_id)
         for item_id in item_ids
+    )
+
+
+def orders_for_item_at_location(requester, universe, item, location):
+    region = universe.chain(
+        location, "station", "system", "constallation", "region",
+    )
+    return (
+        entry for entry in orders_for_item(requester, [region.id], item.id)
+        if entry["location_id"] == location.id
+    )
+
+
+def orders_for_item_in_system(requester, universe, item, system):
+    region = universe.chain(
+        system, "system", "constellation", "region",
+    )
+    return (
+        entry for entry in orders_for_item(requester, [region.id], item.id)
+        if entry["system_id"] == system.id
     )
 
 
@@ -305,6 +331,61 @@ def min_inventory_prices(inventory):
             ):
                 min_prices[item] = inventory[location][item]["price"]
     return min_prices
+
+
+def item_to_location_candidates(
+    universe,
+    orders,
+    top=2,
+    order_type="sell",
+    reverse=False,
+):
+    by_item = groupby(lambda x: x["type_id"], orders)
+
+    best_by_location = {}
+
+    for (item, item_entries) in by_item.items():
+        by_station = groupby(lambda x: x["location_id"], item_entries)
+        for (location, location_entries) in by_station.items():
+            if item not in best_by_location:
+                best_by_location[item] = {}
+            best_by_location[item][location] = list(
+                topk(
+                    top,
+                    [
+                        entry for entry in location_entries
+                        if entry["is_buy_order"] == (order_type == "buy")
+                    ],
+                    key=lambda x: x["price"] if reverse else -x["price"],
+                )
+            )
+
+    sorted_by_location = {}
+
+    for item in best_by_location:
+        if item not in sorted_by_location:
+            sorted_by_location[item] = {}
+
+        for (location, candidates) in best_by_location[item].items():
+            sorted_candidates = sorted(
+                candidates,
+                key=lambda x: x["price"],
+                reverse=reverse,
+            )
+            sorted_by_location[item][location] = sorted_candidates
+
+        sorted_locations = sorted(
+            [
+                (k, v) for (k, v) in sorted_by_location[item].items()
+                if v
+            ],
+            key=lambda x: x[1][0]["price"],
+            reverse=reverse,
+        )
+
+        sorted_by_location[item] = sum([v for (k, v) in sorted_locations], [])
+
+    return sorted_by_location
 
 
 def compute_graph(system_graph, markets):

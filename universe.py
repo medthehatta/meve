@@ -1,6 +1,7 @@
 import itertools
 import json
 import diskcache
+from functools import wraps
 
 import requests
 
@@ -10,20 +11,186 @@ from formal_vector import FormalVector
 
 _json = DefaultHandlers.raise_or_return_json
 
+UNSET = object()
+
 
 class Entity:
 
     def __init__(self, entity_id, name):
-        self.id = entity_id
+        self.id = int(entity_id) if entity_id is not None else None
         self.name = name
 
     def __repr__(self):
         return f"{self.name or '???'} [id: {self.id or '???'}]"
 
 
+class EntityStrictEvaluator:
+
+    def __init__(self, factory):
+        self.factory = factory
+
+    def __getattr__(self, attr):
+        found = getattr(self.factory, attr)
+
+        if callable(found):
+
+            @wraps(found)
+            def _wrapped(*args, **kwargs):
+                return self.factory.reify(found(*args, **kwargs))
+
+            return _wrapped
+
+        else:
+            return found
+
+
+class EntityFactory:
+
+    @classmethod
+    def reify(cls, struct):
+        if isinstance(struct, dict):
+            return type(struct)({k: cls.reify(v) for (k, v) in struct.items()})
+        elif isinstance(struct, (list, tuple)):
+            return type(struct)([cls.reify(x) for x in struct])
+        elif isinstance(struct, LazyEntity):
+            return struct.entity
+        else:
+            return struct
+
+    def __init__(self, items, universe):
+        self.items = items
+        self.universe = universe
+        self.strict = EntityStrictEvaluator(self)
+
+    def from_name(self, name):
+        return LazyEntity(self.universe, self.items, name=name)
+
+    def named(self, name):
+        return self.from_name(name)
+
+    def from_id(self, id):
+        return LazyEntity(self.universe, self.items, id=id)
+
+    def from_name_seq(self, names):
+        return [self.from_name(name) for name in names]
+
+    def from_id_seq(self, ids):
+        return [self.from_id(eid) for eid in ids]
+
+    def from_names(self, *names):
+        return [self.from_name(name) for name in names]
+
+    def from_ids(self, *ids):
+        return [self.from_id(eid) for eid in ids]
+
+    def __call__(self, **kwargs):
+        return LazyEntity(self.universe, self.items, **kwargs)
+
+
+class LazyEntity(Entity):
+
+    def __init__(self, universe, items, entity=None, name=None, id=None):
+        self.universe = universe
+        self.items = items
+        if not any([entity, name, id]):
+            raise TypeError("Must provide entity, name, or id")
+        self._entity = entity
+        self._name = name
+        self._id = int(id) if id is not None else None
+
+    @property
+    def entity(self):
+        if self._entity:
+            pass
+        elif self._id:
+            self._entity = self.universe.from_id(self._id)
+        elif self._name:
+            try:
+                self._entity = self.universe.from_name(self._name)
+            except LookupError:
+                self._entity = self.items.from_terms(self._name)
+        else:
+            raise ValueError(self.__dict__)
+
+        return self._entity
+
+    @property
+    def id(self):
+        return self.entity.id
+
+    @property
+    def name(self):
+        return self.entity.name
+
+    def __repr__(self):
+        if self._entity:
+            return repr(self._entity)
+        elif self._name:
+            return f'LazyEntity(name="{self._name}")'
+        elif self._id:
+            return f'LazyEntity(id="{self._id}")'
+        else:
+            raise ValueError(self.__dict__)
+
+
 class Ingredients(FormalVector):
 
     _ZERO = "Ingredients.NONE"
+
+    @classmethod
+    def parse_with_item_lookup(cls, s, items=None, fuzzy=False):
+        if items:
+
+            def _normalize(x):
+                entity = items.from_terms(x)
+                return entity.name
+
+            def _populate(x):
+                entity = items.from_terms(x)
+                return entity.id
+
+        else:
+            _normalize = None
+            _populate = None
+
+        return super().parse(
+            s, populate=_populate, normalize=_normalize, fuzzy=fuzzy,
+        )
+
+
+    @classmethod
+    def parse_from_list_with_item_lookup(cls, lst, items=None, fuzzy=False):
+        if items:
+
+            def _normalize(x):
+                entity = items.from_terms(x)
+                return entity.name
+
+            def _populate(x):
+                entity = items.from_terms(x)
+                return entity.id
+
+        else:
+            _normalize = None
+            _populate = None
+
+        return super().parse_from_list(
+            lst, populate=_populate, normalize=_normalize, fuzzy=fuzzy,
+        )
+
+    def from_entities(cls, entities):
+        return cls.from_triples(
+            [(entity.name, 1, entity.id) for entity in entities]
+        )
+
+    def from_entity(cls, entity):
+        return cls.from_entities([entity])
+
+    def pretty(self):
+        return "\n".join(
+            f"{amount} {name}"
+            for (name, amount, _) in self.triples()
+        )
 
 
 class ItemFactory:
@@ -67,26 +234,10 @@ class ItemFactory:
 class BlueprintLookup:
 
     def __init__(self, items):
-        self.items = items
         self.cache = diskcache.Cache("eve_blueprints")
 
-    def lookup(
-        self,
-        entity=None,
-        entity_id=None,
-        entity_terms=None,
-        entity_name=None,
-    ):
-        if entity:
-            entity_id = entity.id
-        elif entity_id:
-            entity_id = entity_id
-        elif entity_terms:
-            entity_id = self.items.from_terms(entity_terms).id
-        elif entity_name:
-            entity_id = self.items.from_name(entity_name).id
-        else:
-            raise ValueError("Must provide an argument!")
+    def lookup(self, entity):
+        entity_id = entity.id
 
         if entity_id not in self.cache:
             result = _json(
@@ -99,19 +250,8 @@ class BlueprintLookup:
 
         return self.cache.get(entity_id)
 
-    def ingredients(
-        self,
-        entity=None,
-        entity_id=None,
-        entity_terms=None,
-        entity_name=None,
-    ):
-        data = self.lookup(
-            entity=entity,
-            entity_id=entity_id,
-            entity_terms=entity_terms,
-            entity_name=entity_name,
-        )
+    def ingredients(self, entity):
+        data = self.lookup(entity)
 
         if "activityMaterials" not in data:
             return Ingredients.zero()
@@ -207,6 +347,158 @@ class UniverseLookup:
             self.requester.request("GET", f"/universe/{kind}s/{id_}")
         )
 
+    def chain_seq(self, entity, k_chain, default=UNSET):
+        ka_chain = [(a, f"{b}_id") for (a, b) in zip(k_chain, k_chain[1:])]
+
+        found = entity.id
+
+        for (kind, attr) in ka_chain:
+            try:
+                found = self.details(kind, entity_id=found)[attr]
+            except KeyError:
+                if default is UNSET:
+                    raise
+                else:
+                    found = default
+                    break
+
+        return self.from_id(found)
+
+    def chain(self, entity, *k_chain, default=UNSET):
+        return self.chain_seq(entity, k_chain, default=default)
+
+
+class Industry:
+
+    def __init__(self, universe, blueprints):
+        self.universe = universe
+        # FIXME: Dumb but we can fix all the dependency injection later
+        self.requester = self.universe.requester
+        self.blueprints = blueprints
+        self._cost_indices = None
+        self._market_prices = None
+        self._facility_info = None
+
+    def ingredients(self, entity):
+        return self.blueprints.ingredients(entity)
+
+    def base_manufacture_cost_verbose(self, entity):
+        ingredients = self.blueprints.ingredients(entity)
+        pre_price = (
+            (name, quantity, self.adjusted_price(self.universe.from_id(eid)))
+            for (name, quantity, eid) in ingredients.triples()
+        )
+        ingredient_prices = {
+            name: {
+                "individual": adjusted_price,
+                "job": quantity * adjusted_price,
+            }
+            for (name, quantity, adjusted_price) in pre_price
+        }
+        ingredient_prices["total"] = sum(
+            x["job"] for x in ingredient_prices.values()
+        )
+        return ingredient_prices
+
+    def base_manufacture_cost(self, entity):
+        return self.base_manufacture_cost_verbose(entity)["total"]
+
+    def installation_cost_verbose(
+        self,
+        item_entity,
+        facility_entity,
+        alpha=False,
+    ):
+        system_entity = self.universe.chain(
+            facility_entity,
+            "station",
+            "system",
+        )
+        cost_index = self.manufacturing_index(system_entity)
+        if not cost_index:
+            raise ValueError(
+                f"System '{system_entity}' does not provide manufacturing"
+            )
+        ingredient_prices = self.base_manufacture_cost_verbose(item_entity)
+        # TODO: figure out bonuses
+        bonuses = 1
+        facility = self.facility(facility_entity)
+        if facility is None:
+            raise ValueError(
+                f"Facility '{facility_entity}' does not provide manufacturing"
+            )
+        facility_tax = facility.get("tax", 0.25/100)
+        cost = ingredient_prices["total"] * (
+            cost_index * bonuses +
+            facility_tax +
+            0.25/100 +
+            (0.25/100 if alpha else 0)
+        )
+        return {
+            "item": item_entity,
+            "facility": facility_entity,
+            "facility_info": facility,
+            "alpha": alpha,
+            "ingredients": ingredient_prices,
+            "base_cost": cost,
+        }
+
+    def adjusted_price(self, item_entity):
+        return self.market_prices()["adjusted"][item_entity.id]
+
+    def manufacturing_index(self, system_entity):
+        return self.cost_indices()["manufacturing"].get(system_entity.id)
+
+    def facility(self, facility_entity):
+        return self.facility_info().get(facility_entity.id)
+
+    def cost_indices(self):
+        if self._cost_indices is None:
+            requester = self.requester
+            data = _json(requester.request("GET", "/industry/systems/"))
+            result = {}
+
+            for system in data:
+                sid = system["solar_system_id"]
+                for idx in system["cost_indices"]:
+                    act = idx["activity"]
+                    if act not in result:
+                        result[act] = {}
+                    result[act][sid] = idx["cost_index"]
+
+            self._cost_indices = result
+
+        return self._cost_indices
+
+    def market_prices(self):
+        if self._market_prices is None:
+            requester = self.requester
+            data = _json(requester.request("GET", "/markets/prices/"))
+            result = {
+                "adjusted": {},
+                "average": {},
+            }
+
+            for entry in data:
+                result["adjusted"][entry["type_id"]] = entry["adjusted_price"]
+                result["average"][entry["type_id"]] = entry.get("average_price")
+
+            self._market_prices = result
+
+        return self._market_prices
+
+    def facility_info(self):
+        if self._facility_info is None:
+            requester = self.requester
+            data = _json(requester.request("GET", "/industry/facilities/"))
+            result = {
+                entry["facility_id"]: entry for entry in data
+            }
+
+            self._facility_info = result
+
+        return self._facility_info
+
 
 def station_lookup(universe, name):
     try:
@@ -221,8 +513,6 @@ def station_lookup(universe, name):
     else:
         raise LookupError(name)
 
-
-UNSET = object()
 
 class UserAssets:
 
@@ -292,15 +582,17 @@ class UserAssets:
                     avg_price,
                 )
         self.cache.set(
-            self.key_last(),
+            self.last_key(),
             max(p["date"] for p in new_purchases),
         )
 
-    def total_quantities(self):
-        data = _json(
+    def assets(self):
+        return _json(
             self.requester.request("GET", f"/characters/{self.character_id}/assets")
         )
-        return self._total_quantities(data)
+
+    def total_quantities(self):
+       return self._total_quantities(self.assets())
 
     def transactions(self):
         data = _json(

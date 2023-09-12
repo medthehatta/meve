@@ -15,6 +15,7 @@ from purchase_tour import Travel
 from purchase_tour import load_system_graph
 from purchase_tour import markets_inventories
 from purchase_tour import orders_in_regions
+from purchase_tour import item_to_location_candidates
 from universe import ItemFactory
 from universe import UniverseLookup
 from universe import station_lookup
@@ -209,8 +210,17 @@ def plot(
     default=DEFAULT_REGION_NAMES,
     multiple=True,
 )
+@click.option(
+    "-l",
+    "--locations",
+    default=0,
+)
+@click.option(
+    "--reverse",
+    is_flag=True,
+)
 @click.argument("items", type=click.File("r"))
-def orders(region, order_type, items):
+def orders(region, order_type, locations, reverse, items):
     # Better name for the variable
     region_names = region
 
@@ -233,27 +243,48 @@ def orders(region, order_type, items):
 
     market_entries = orders_in_regions(requester, region_ids, required_ids)
 
-    for entry in market_entries:
-        if order_type == "buy" and not entry["is_buy_order"]:
-            continue
-        elif order_type == "sell" and entry["is_buy_order"]:
-            continue
-
-        entry1 = {
-            "item": universe.from_id(entry["type_id"]).name,
-            "system": universe.from_id(entry["system_id"]).name,
-            "station": universe.from_id(entry["location_id"]).name,
-            "price": entry["price"],
-            "volume": entry["volume_remain"],
-            "kind": "buy" if entry["is_buy_order"] else "sell",
+    if locations:
+        entries_ids = item_to_location_candidates(
+            universe,
+            market_entries,
+            top=locations,
+            reverse=reverse,
+            order_type=order_type,
+        )
+        entries = {
+            universe.from_id(k).name: [
+                {
+                    "station": universe.from_id(v["location_id"]).name,
+                    "price": v["price"],
+                    "volume": v["volume_remain"],
+                }
+                for v in vv
+            ]
+            for (k, vv) in entries_ids.items()
         }
-        print(json.dumps(entry1))
+        print(json.dumps(entries))
+    else:
+        for entry in market_entries:
+            if order_type == "buy" and not entry["is_buy_order"]:
+                continue
+            elif order_type == "sell" and entry["is_buy_order"]:
+                continue
+
+            entry1 = {
+                "item": universe.from_id(entry["type_id"]).name,
+                "system": universe.from_id(entry["system_id"]).name,
+                "station": universe.from_id(entry["location_id"]).name,
+                "price": entry["price"],
+                "volume": entry["volume_remain"],
+                "kind": "buy" if entry["is_buy_order"] else "sell",
+            }
+            print(json.dumps(entry1))
 
 
 @cli.command()
-@click.option("-b", "--line-break", is_flag=True)
+@click.option("--oneline", is_flag=True)
 @click.argument("item")
-def blueprint(line_break, item):
+def blueprint(oneline, item):
     desired = next(iter(parse_recipe_lines([f"1 {item}"])))
 
     requester = Requester("https://esi.evetech.net/latest/", EmptyToken())
@@ -264,13 +295,10 @@ def blueprint(line_break, item):
 
     ingredients = blueprints.ingredients(entity_id=desired_id)
 
-    if line_break:
-        mats = ingredients.triples()
-        delim = "\n"
-        s = delim.join(f"{quantity} {name}" for (name, quantity, _) in mats)
-        print(s)
-    else:
+    if oneline:
         print(ingredients)
+    else:
+        print(ingredients.pretty_components())
 
 
 if __name__ == "__main__":

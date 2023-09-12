@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from dataclasses import field
 import base64
+import os
+import pickle
+from pickle import UnpicklingError
 import time
 from typing import Any
 
@@ -110,6 +113,7 @@ class OidcFlow(AccessToken):
     # Token initialization is lazy: no guarantees you have a valid token
     # until you try calling `get()`
     tokens: Any = None
+    disk_path: str = None
 
     def login_grant(self):
         raise NotImplementedError()
@@ -140,6 +144,16 @@ class OidcFlow(AccessToken):
         self.refresh_expire_time = (
             time.time() + int(self.tokens.get("refresh_expires_in", 0)) - leeway
         )
+        if self.disk_path:
+            with open(self.disk_path, "wb") as f:
+                pickle.dump(
+                    {
+                        "tokens": self.tokens,
+                        "expire_time": self.expire_time,
+                        "refresh_expire_time": self.refresh_expire_time,
+                    },
+                    f,
+                )
         return self.tokens
 
     def _login(self):
@@ -161,6 +175,18 @@ class OidcFlow(AccessToken):
     def get(self):
         """Retrieve the token, refreshing if necessary."""
         current_time = time.time()
+
+        if self.disk_path is not None:
+            if os.path.exists(self.disk_path):
+                with open(self.disk_path, "rb") as f:
+                    try:
+                        data = pickle.load(f)
+                        self.tokens = data["tokens"]
+                        self.expire_time = data["expire_time"]
+                        self.refresh_expire_time = data["refresh_expire_time"]
+                    except UnpicklingError:
+                        pass
+
         if self.tokens is None:
             self.tokens = self._login()
         elif current_time < self.expire_time:
@@ -169,6 +195,7 @@ class OidcFlow(AccessToken):
             self.tokens = self._refresh()
         else:
             self.tokens = self._login()
+
         return self.tokens["access_token"]
 
     @property

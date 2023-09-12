@@ -95,6 +95,7 @@ from universe import ItemFactory
 from universe import BlueprintLookup
 from universe import Ingredients
 from universe import EntityFactory
+from universe import Industry
 from purchase_tour import orders_by_location
 from purchase_tour import orders_by_item
 from purchase_tour import orders_in_regions
@@ -672,6 +673,10 @@ def _truthy(seq):
     return [x for x in seq if x]
 
 
+
+
+mff = MarketSeriesFactoryFactory(items=items, requester=r0, region_ids=DEFAULT_REGION_IDS)
+
 rig_names_for_sale = [
     "Small Auxiliary Thrusters I",
     "Small Cargohold Optimization I",
@@ -681,10 +686,8 @@ rig_names_for_sale = [
     "Small Signal Focusing Kit I",
 ]
 rigs_for_sale = entity.from_name_seq(rig_names_for_sale)
+rig_ingredients = {x: blueprints.ingredients(x) for x in rigs_for_sale}
+all_ingredients = Ingredients.sum(rig_ingredients.values())
 
 
-import purchase_planner as pp
-
-
-mff = MarketSeriesFactoryFactory(items=items, requester=r0, region_ids=DEFAULT_REGION_IDS)
-#mf = mff.get(entities=rigs_for_sale)
+industry = Industry(universe, blueprints)

@@ -1,3 +1,4 @@
+import re
 import os
 from dataclasses import dataclass
 import json
@@ -10,6 +11,8 @@ from contextlib import contextmanager
 
 import networkx as nx
 from cytoolz import get_in
+from cytoolz import groupby
+from cytoolz import valmap
 from bs4 import BeautifulSoup
 
 from formal_vector import FormalVector
@@ -81,7 +84,20 @@ tok = auth.EveOnlineFlow(
         "esi-markets.read_corporation_orders.v1",
     ],
     code_fetcher=auth.get_code_http(8080),
-    disk_path="token.pkl",
+)
+if os.path.exists("token.pkl"):
+    token_data = slurp_pickle("token.pkl")
+    tok.tokens = token_data["tokens"]
+    tok.expire_time = token_data["expire_time"]
+    tok.refresh_expire_time = token_data["refresh_expire_time"]
+#tok.get()
+dump_pickle(
+    {
+        "tokens": tok.tokens,
+        "expire_time": tok.expire_time,
+        "refresh_expire_time": tok.refresh_expire_time,
+    },
+    "token.pkl",
 )
 
 r0 = Requester("https://esi.evetech.net/latest/", EmptyToken())
@@ -94,12 +110,9 @@ from universe import UniverseLookup
 from universe import ItemFactory
 from universe import BlueprintLookup
 from universe import Ingredients
-from universe import EntityFactory
 from purchase_tour import orders_by_location
 from purchase_tour import orders_by_item
 from purchase_tour import orders_in_regions
-from purchase_tour import orders_for_item_at_location
-from purchase_tour import orders_for_item_in_system
 from cli import DEFAULT_REGION_NAMES
 from delayed import Delayed
 
@@ -107,12 +120,11 @@ from delayed import Delayed
 universe = UniverseLookup(r0)
 items = ItemFactory(r0, "types.json")
 blueprints = BlueprintLookup(items)
-ua = UserAssets(r, "Mola Pavonis")
+#ua = UserAssets(r, "Mola Pavonis")
 ingredients_parser = lambda s: Ingredients.parse_with_item_lookup(s, items=items)
-entity = EntityFactory(items, universe)
 
 
-DEFAULT_REGION_IDS = [entity(name=x).id for x in DEFAULT_REGION_NAMES]
+DEFAULT_REGION_IDS = [universe.from_name(x).id for x in DEFAULT_REGION_NAMES]
 SOME_ITEM_NAMES = [
     "Small Auxiliary Thrusters I",
     "Small Cargohold Optimization I",
@@ -121,7 +133,7 @@ SOME_ITEM_NAMES = [
     "Small Signal Focusing Kit I",
 ]
 SOME_ITEM_IDS = [
-    entity(name=x).id
+    universe.from_name(x).id
     for x in [
         y.strip() for y in SOME_ITEM_NAMES
         if y.strip()
@@ -135,7 +147,7 @@ DEFAULT_LOCATION_NAMES = [
     "Alentene VI - Moon 6 - Roden Shipyards Warehouse",
 ]
 DEFAULT_LOCATION_IDS = [
-    entity(name=x).id for x in DEFAULT_LOCATION_NAMES
+    universe.from_name(x).id for x in DEFAULT_LOCATION_NAMES
 ]
 
 
@@ -145,51 +157,21 @@ class CraftingPrices:
         self.blueprints = blueprints
         self.user_assets = user_assets
 
-    def smart_avg_crafting_price(self, entity):
+    def smart_avg_crafting_price(self, item_id):
         return sum(
             amt * self.user_assets.smart_avg_buy(ing_id)
-            for (_, amt, ing_id) in self.blueprints.ingredients(entity).triples()
+            for (amt, ing_id) in self.blueprints.ingredients(
+                entity_id=item_id,
+            )
         )
 
 
-def first(seq):
-    return next((s for s in seq if s is not None), None)
-
-
 # TODO: Add caching; generally reduce reliance on making API calls
-def minimum_crafted_sell_price(ua, blueprints, entity, ent, multiplier=1.2):
+def minimum_crafted_sell_price(blueprints, item_id, multiplier=1.2):
     return multiplier*sum(
         amt * ua.smart_avg_buy(entity_id)
-        for (_, amt, entity_id) in blueprints.ingredients(ent).triples()
+        for (amt, entity_id) in blueprints.ingredients(entity_id=item_id)
     )
-
-
-def minimum_sell_price_listing(blueprints, listing, multiplier=1.2):
-    for (entry, _, _) in listing.triples():
-        price = minimum_crafted_sell_price(blueprints, items.from_terms(entry).id, multiplier)
-        print(f"{entry}\t{price}")
-
-
-def choose_sell_operation(mkt_series_factory, crafting_prices, item_id, location_id):
-    min_craft = crafting_prices.smart_avg_crafting_price(item_id)
-    sell = SeriesMetrics(mkt_series_factory.sell_series(item_id))
-    local_sell = SeriesMetrics(
-        mkt_series_factory.local_sell_series(item_id, location_id)
-    )
-    buy = SeriesMetrics(mkt_series_factory.buy_series(item_id))
-    local_buy = SeriesMetrics(
-        mkt_series_factory.local_buy_series(item_id, location_id)
-    )
-    return {
-        "minimum": max(local_sell.minimum - 100, min_craft),
-        "normal": sell.average,
-        "maximum": 2*sell.maximum,
-    }
-
-
-# choose_sell_price
-# choose_buy_price
-# choose_to_craft
 
 
 class MarketMetrics:
@@ -456,17 +438,6 @@ class BuySeries(MarketSeries):
 
 class MarketSeriesFactory:
 
-    # TODO: Figure out if I want to always do multiple items or if I want to do
-    # separate items and then join these factories
-
-    @classmethod
-    def from_system(cls, universe, system, item):
-        # FIXME: Ehhh a little dubious
-        requester = universe.requester
-        return cls(
-            orders_for_item_in_system(requester, universe, system, items)
-        )
-
     @classmethod
     def from_regions(cls, requester, region_ids, item_ids):
         return cls(orders_in_regions(requester, region_ids, item_ids))
@@ -485,30 +456,6 @@ class MarketSeriesFactory:
 
     def local_buy_series(self, item_id, location_id):
         return LocalBuySeries(self.by_item, item_id, location_id)
-
-
-class MarketSeriesFactoryFactory:
-
-    def __init__(self, items, requester, region_ids):
-        self.items = items
-        self.requester = requester
-        self.region_ids = region_ids
-
-    def get(self, entities=None, names=None, ids=None):
-        if entities:
-            item_ids = [e.id for e in entities]
-        elif names:
-            item_ids = [self.items.from_terms(n) for n in names]
-        elif ids:
-            item_ids = ids
-        else:
-            raise TypeError("Must provide entities, names, or ids")
-
-        return MarketSeriesFactory.from_regions(
-            requester=self.requester,
-            region_ids=self.region_ids,
-            item_ids=item_ids,
-        )
 
 
 @dataclass
@@ -551,6 +498,23 @@ class SeriesMetrics:
             return ordered[k] + d*(ordered[k+1] - ordered[k])
 
 
+def choose_sell_operation(mkt_series_factory, item_id, location_id):
+    min_craft = None  # TODO
+    sell = SeriesMetrics(mkt_series_factory.sell_series(item_id))
+    local_sell = SeriesMetrics(
+        mkt_series_factory.local_sell_series(item_id, location_id)
+    )
+    buy = SeriesMetrics(mkt_series_factory.buy_series(item_id))
+    local_buy = SeriesMetrics(
+        mkt_series_factory.local_buy_series(item_id, location_id)
+    )
+    return {
+        "minimum": max(local_sell.minimum - 100, min_craft),
+        "normal": sell.average,
+        "maximum": 2*sell.maximum,
+    }
+
+
 item_listing = """
 Small Auxiliary Thrusters I	10
 Small Cargohold Optimization I	10
@@ -590,7 +554,7 @@ def style(element):
 
 
 def kills_soup(character_name):
-    character_id = entity(name=character_name).id
+    character_id = universe.from_name(character_name).id
     return BeautifulSoup(zk.request("GET", f"/character/{character_id}/").text)
 
 
@@ -668,23 +632,131 @@ def ranked_threats(data):
 
 
 
-def _truthy(seq):
-    return [x for x in seq if x]
+
+def parse_recipe_lines(lines):
+    components = {}
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        match = re.search(r"^(\d+(?:[.]\d*)?)\s+(.+)\s*$", line)
+        match_no_num = re.search(r"^(.+)\s*$", line)
+        if match:
+            count = float(match.group(1))
+            item = match.group(2).lower()
+            components[item] = components.get(item, 0) + count
+        elif match_no_num:
+            count = 1
+            item = match_no_num.group(1).lower()
+            components[item] = components.get(item, 0) + count
+        else:
+            print(f"No match: '{line}'")
+    parsed = {(count, item) for (item, count) in components.items()}
+    return parsed
 
 
-rig_names_for_sale = [
-    "Small Auxiliary Thrusters I",
-    "Small Cargohold Optimization I",
-    "Small Hyperspatial Velocity Optimizer I",
-    "Small Low Friction Nozzle Joints I",
-    "Small Polycarbon Engine Housing I",
-    "Small Signal Focusing Kit I",
+DEFAULT_REGION_NAMES = [
+    "Verge Vendor",
+    "Placid",
+    "Essence",
+    "Sinq Laison",
 ]
-rigs_for_sale = entity.from_name_seq(rig_names_for_sale)
 
 
-import purchase_planner as pp
+def sell_orders(desired):
+    # Better name for the variable
+    region_names = DEFAULT_REGION_NAMES
+
+    order_type = "sell"
+
+    requester = Requester("https://esi.evetech.net/latest/", EmptyToken())
+    universe = UniverseLookup(requester)
+
+    region_ids = [
+        universe.from_name(region_name).id for region_name in region_names
+    ]
+
+    items = ItemFactory(requester, "types.json")
+
+    required = {
+        (amount, items.from_terms(fuzzy_name).id)
+        for (amount, fuzzy_name) in desired
+    }
+    required_ids = {item_id for (_, item_id) in required}
+
+    market_entries = orders_in_regions(requester, region_ids, required_ids)
+
+    for entry in market_entries:
+        if order_type == "buy" and not entry["is_buy_order"]:
+            continue
+        elif order_type == "sell" and entry["is_buy_order"]:
+            continue
+
+        entry1 = {
+            "item": universe.from_id(entry["type_id"]).name,
+            "system": universe.from_id(entry["system_id"]).name,
+            "station": universe.from_id(entry["location_id"]).name,
+            "price": entry["price"],
+            "volume": entry["volume_remain"],
+            "kind": "buy" if entry["is_buy_order"] else "sell",
+        }
+
+        yield entry1
 
 
-mff = MarketSeriesFactoryFactory(items=items, requester=r0, region_ids=DEFAULT_REGION_IDS)
-#mf = mff.get(entities=rigs_for_sale)
+def postprocess(required, orders):
+    satisfactory = [
+        order for order in orders
+        if order["volume"] >= required[order["item"].lower()]
+    ]
+
+    by_item = groupby(lambda x: x["item"], satisfactory)
+
+    best_by_location = {}
+
+    for (item, item_entries) in by_item.items():
+        for (location, location_entries) in groupby(lambda x: x["station"], item_entries).items():
+            if item not in best_by_location:
+                best_by_location[item] = {}
+            best_by_location[item][location] = min(location_entries, key=lambda x: x["price"])
+
+    sorted_by_location = {}
+
+    for item in best_by_location:
+        sorted_by_location[item] = sorted(best_by_location[item].values(), key=lambda y: y["price"])
+        sorted_by_location[item] = [
+            {"station": x["station"], "price": x["price"]}
+            for x in sorted_by_location[item]
+        ]
+
+    return sorted_by_location
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "items",
+        type=argparse.FileType("r"),
+        nargs="?",
+        default="-",
+    )
+    parsed = parser.parse_args()
+
+    items = parsed.items
+
+    desired = parse_recipe_lines(items)
+    required = {item: count for (count, item) in desired}
+
+    orders = sell_orders(desired)
+
+    sorted_by_location = postprocess(required, orders)
+
+    print(json.dumps(sorted_by_location))
+
+
+
+if __name__ == "__main__":
+    main()
