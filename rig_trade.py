@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Optional
 import json
 import pickle
 from pprint import pprint
@@ -10,7 +11,11 @@ from contextlib import contextmanager
 
 import networkx as nx
 from cytoolz import get_in
+from cytoolz import keymap
+from cytoolz import valmap
+from cytoolz import curry
 from bs4 import BeautifulSoup
+import diskcache
 
 from formal_vector import FormalVector
 from hxxp import Requester
@@ -97,8 +102,8 @@ from universe import Ingredients
 from universe import EntityFactory
 from universe import Industry
 from purchase_tour import orders_by_location
-from purchase_tour import orders_by_item
 from purchase_tour import orders_in_regions
+from purchase_tour import orders_for_item
 from purchase_tour import orders_for_item_at_location
 from purchase_tour import orders_for_item_in_system
 from cli import DEFAULT_REGION_NAMES
@@ -107,10 +112,10 @@ from delayed import Delayed
 
 universe = UniverseLookup(r0)
 items = ItemFactory(r0, "types.json")
-blueprints = BlueprintLookup(items)
+entity = EntityFactory(items, universe)
+blueprints = BlueprintLookup(items, entity)
 ua = UserAssets(r, "Mola Pavonis")
 ingredients_parser = lambda s: Ingredients.parse_with_item_lookup(s, items=items)
-entity = EntityFactory(items, universe)
 
 
 DEFAULT_REGION_IDS = [entity(name=x).id for x in DEFAULT_REGION_NAMES]
@@ -171,374 +176,63 @@ def minimum_sell_price_listing(blueprints, listing, multiplier=1.2):
         print(f"{entry}\t{price}")
 
 
-def choose_sell_operation(mkt_series_factory, crafting_prices, item_id, location_id):
-    min_craft = crafting_prices.smart_avg_crafting_price(item_id)
-    sell = SeriesMetrics(mkt_series_factory.sell_series(item_id))
-    local_sell = SeriesMetrics(
-        mkt_series_factory.local_sell_series(item_id, location_id)
-    )
-    buy = SeriesMetrics(mkt_series_factory.buy_series(item_id))
-    local_buy = SeriesMetrics(
-        mkt_series_factory.local_buy_series(item_id, location_id)
-    )
-    return {
-        "minimum": max(local_sell.minimum - 100, min_craft),
-        "normal": sell.average,
-        "maximum": 2*sell.maximum,
-    }
-
-
-# choose_sell_price
-# choose_buy_price
-# choose_to_craft
-
-
-class MarketMetrics:
+class WeightedSeries:
 
     @classmethod
-    def from_regions(cls, requester, region_ids, item_ids):
-        return cls(orders_in_regions(requester, region_ids, item_ids))
-
-    def __init__(self, orders):
-        self.by_item = orders_by_item(orders)
-
-    def sell_price_series(self, item_id):
-        return [
-            x["price"] for x in itertools.chain.from_iterable(
-                self.by_item.get(item_id, {}).values()
-            )
-            if not x["is_buy_order"]
+    def from_record_sequence(cls, seq, value_key, weight_key=None):
+        pairs = [
+            (record.get(value_key), record.get(weight_key, 1))
+            for record in seq
         ]
+        values = [v for (v, _) in pairs]
+        weights = [w for (_, w) in pairs]
+        return cls(values, weights)
 
-    def buy_price_series(self, item_id):
-        return [
-            x["price"] for x in itertools.chain.from_iterable(
-                self.by_item.get(item_id, {}).values()
-            )
-            if x["is_buy_order"]
-        ]
-
-    def sell_quantity_series(self, item_id):
-        return [
-            x["volume_total"] for x in itertools.chain.from_iterable(
-                self.by_item.get(item_id, {}).values()
-            )
-            if not x["is_buy_order"]
-        ]
-
-    def buy_quantity_series(self, item_id):
-        return [
-            x["volume_total"] for x in itertools.chain.from_iterable(
-                self.by_item.get(item_id, {}).values()
-            )
-            if x["is_buy_order"]
-        ]
-
-    def avg_sell(self, item_id):
-        series = self.sell_price_series(item_id)
-        return sum(series) / len(series)
-
-    def weighted_avg_sell(self, item_id):
-        prices = self.sell_price_series(item_id)
-        quantities = self.sell_quantity_series(item_id)
-        total_cost = sum(x*y for (x, y) in zip(prices, quantities))
-        total_purchased = sum(quantities)
-        return total_cost / total_purchased
-
-    def avg_buy(self, item_id):
-        series = self.buy_price_series(item_id)
-        return sum(series) / len(series)
-
-    def weighted_avg_buy(self, item_id):
-        prices = self.buy_price_series(item_id)
-        quantities = self.buy_quantity_series(item_id)
-        total_cost = sum(x*y for (x, y) in zip(prices, quantities))
-        total_purchased = sum(quantities)
-        return total_cost / total_purchased
-
-    def local_sell_price_series(self, item_id, location_id):
-        return [
-            x["price"]
-            for x in self.by_item.get(item_id, {}).get(location_id, [])
-            if not x["is_buy_order"]
-        ]
-
-    def local_sell_quantity_series(self, item_id, location_id):
-        return [
-            x["volume_total"]
-            for x in self.by_item.get(item_id, {}).get(location_id, [])
-            if not x["is_buy_order"]
-        ]
-
-    def local_buy_price_series(self, item_id, location_id):
-        return [
-            x["price"]
-            for x in self.by_item.get(item_id, {}).get(location_id, [])
-            if x["is_buy_order"]
-        ]
-
-    def local_buy_quantity_series(self, item_id, location_id):
-        return [
-            x["volume_total"]
-            for x in self.by_item.get(item_id, {}).get(location_id, [])
-            if x["is_buy_order"]
-        ]
-
-    def avg_local_sell(self, item_id, location_id):
-        series = self.local_sell_price_series(item_id, location_id)
-        return sum(series) / len(series)
-
-    def weighted_avg_local_sell(self, item_id, location_id):
-        prices = self.local_sell_price_series(item_id, location_id)
-        quantities = self.local_sell_quantity_series(item_id, location_id)
-        total_cost = sum(x*y for (x, y) in zip(prices, quantities))
-        total_purchased = sum(quantities)
-        return total_cost / total_purchased
-
-    def avg_local_buy(self, item_id, location_id):
-        series = self.local_buy_price_series(item_id, location_id)
-        return sum(series) / len(series)
-
-    def weighted_avg_local_buy(self, item_id, location_id):
-        prices = self.local_buy_price_series(item_id, location_id)
-        quantities = self.local_buy_quantity_series(item_id, location_id)
-        total_cost = sum(x*y for (x, y) in zip(prices, quantities))
-        total_purchased = sum(quantities)
-        return total_cost / total_purchased
-
-    def max_sell(self, item_id):
-        return max(self.sell_price_series(item_id))
-
-    def local_max_sell(self, item_id, location_id):
-        return max(self.local_sell_price_series(item_id, location_id))
-
-    def max_buy(self, item_id):
-        return max(self.buy_price_series(item_id))
-
-    def local_max_buy(self, item_id, location_id):
-        return max(self.local_buy_price_series(item_id, location_id))
-
-    def min_sell(self, item_id):
-        return min(self.sell_price_series(item_id))
-
-    def local_min_sell(self, item_id, location_id):
-        return min(self.local_sell_price_series(item_id, location_id))
-
-    def min_buy(self, item_id):
-        return min(self.buy_price_series(item_id))
-
-    def local_min_buy(self, item_id, location_id):
-        return min(self.local_buy_price_series(item_id, location_id))
-
-
-@dataclass
-class MarketSeries:
-
-    def _prices(self):
-        raise NotImplementedError()
-
-    def _quantities(self):
-        raise NotImplementedError()
+    def __init__(self, values, weights=None):
+        self._values = values
+        self._weights = weights
 
     @property
-    def prices(self):
-        if self._price_series is None:
-            self._price_series = list(self._prices())
-        return self._price_series
+    def values(self):
+        return self._values
 
     @property
-    def quantities(self):
-        if self._quantity_series is None:
-            self._quantity_series = list(self._quantities())
-        return self._quantity_series
-
-
-@dataclass
-class LocalSellSeries(MarketSeries):
-
-    item_id: int
-    location_id: int
-
-    def _prices(self):
-        return [
-            x["price"]
-            for x in get_in(
-                [self.item_id, self.location_id],
-                self.by_item,
-                default=[],
-            )
-            if not x["is_buy_order"]
-        ]
-
-    def _quantities(self):
-        return [
-            x["volume_total"]
-            for x in get_in(
-                [self.item_id, self.location_id],
-                self.by_item,
-                default=[],
-            )
-            if not x["is_buy_order"]
-        ]
-
-
-@dataclass
-class SellSeries(MarketSeries):
-
-    item_id: int
-
-    def _prices(self):
-        return [
-            x["price"] for x in itertools.chain.from_iterable(
-                self.by_item.get(self.item_id, {}).values()
-            )
-            if not x["is_buy_order"]
-        ]
-
-    def _quantities(self):
-        return [
-            x["volume_total"] for x in itertools.chain.from_iterable(
-                self.by_item.get(self.item_id, {}).values()
-            )
-            if not x["is_buy_order"]
-        ]
-
-
-@dataclass
-class LocalBuySeries(MarketSeries):
-
-    item_id: int
-    location_id: int
-
-    def _prices(self):
-        return [
-            x["price"]
-            for x in get_in(
-                [self.item_id, self.location_id],
-                self.by_item,
-                default=[],
-            )
-            if x["is_buy_order"]
-        ]
-
-    def _quantities(self):
-        return [
-            x["volume_total"]
-            for x in get_in(
-                [self.item_id, self.location_id],
-                self.by_item,
-                default=[],
-            )
-            if x["is_buy_order"]
-        ]
-
-
-@dataclass
-class BuySeries(MarketSeries):
-
-    item_id: int
-
-    def _prices(self):
-        return [
-            x["price"] for x in itertools.chain.from_iterable(
-                self.by_item.get(self.item_id, {}).values()
-            )
-            if x["is_buy_order"]
-        ]
-
-    def _quantities(self):
-        return [
-            x["volume_total"] for x in itertools.chain.from_iterable(
-                self.by_item.get(self.item_id, {}).values()
-            )
-            if x["is_buy_order"]
-        ]
-
-
-class MarketSeriesFactory:
-
-    # TODO: Figure out if I want to always do multiple items or if I want to do
-    # separate items and then join these factories
-
-    @classmethod
-    def from_system(cls, universe, system, item):
-        # FIXME: Ehhh a little dubious
-        requester = universe.requester
-        return cls(
-            orders_for_item_in_system(requester, universe, system, items)
-        )
-
-    @classmethod
-    def from_regions(cls, requester, region_ids, item_ids):
-        return cls(orders_in_regions(requester, region_ids, item_ids))
-
-    def __init__(self, orders):
-        self.by_item = orders_by_item(orders)
-
-    def sell_series(self, item_id):
-        return SellSeries(self.by_item, item_id)
-
-    def buy_series(self, item_id):
-        return BuySeries(self.by_item, item_id)
-
-    def local_sell_series(self, item_id, location_id):
-        return LocalSellSeries(self.by_item, item_id, location_id)
-
-    def local_buy_series(self, item_id, location_id):
-        return LocalBuySeries(self.by_item, item_id, location_id)
-
-
-class MarketSeriesFactoryFactory:
-
-    def __init__(self, items, requester, region_ids):
-        self.items = items
-        self.requester = requester
-        self.region_ids = region_ids
-
-    def get(self, entities=None, names=None, ids=None):
-        if entities:
-            item_ids = [e.id for e in entities]
-        elif names:
-            item_ids = [self.items.from_terms(n) for n in names]
-        elif ids:
-            item_ids = ids
+    def weights(self):
+        if self._weights is None:
+            return [1]*len(self.values)
         else:
-            raise TypeError("Must provide entities, names, or ids")
+            return self._weights
 
-        return MarketSeriesFactory.from_regions(
-            requester=self.requester,
-            region_ids=self.region_ids,
-            item_ids=item_ids,
-        )
+    def __repr__(self):
+        return f"<WeightedSeries (size: {len(self.values)})>"
 
 
-@dataclass
-class SeriesMetrics:
+class WeightedSeriesMetrics:
 
-    series: MarketSeries
+    @classmethod
+    def average(cls, series):
+        return sum(series.values) / len(series.values)
 
-    @property
-    def average(self):
-        return sum(self.series.prices) / len(self.series.prices)
-
-    @property
-    def weighted_average(self):
+    @classmethod
+    def weighted_average(cls, series):
         total_cost = sum(
-            x*y for (x, y) in zip(self.series.prices, self.series.quantities)
+            x*y for (x, y) in zip(series.values, series.weights)
         )
-        total_purchased = sum(self.series.quantities)
+        total_purchased = sum(series.weights)
         return total_cost / total_purchased
 
-    @property
-    def maximum(self):
-        return max(self.series.prices)
+    @classmethod
+    def maximum(cls, series):
+        return max(series.values)
 
-    @property
-    def minimum(self):
-        return min(self.series.prices)
+    @classmethod
+    def minimum(cls, series):
+        return min(series.values)
 
-    def percentile(self, pct):
-        seq = self.series.prices
+    @classmethod
+    @curry
+    def percentile(cls, pct, series):
+        seq = series.values
         ordered = sorted(seq)
         N = len(ordered)
         k_d = (pct/100) * N
@@ -546,10 +240,83 @@ class SeriesMetrics:
         d = k_d - k
         if k == 0:
             return ordered[0]
-        elif k >= N:
+        elif k >= N-1:
             return ordered[-1]
         else:
             return ordered[k] + d*(ordered[k+1] - ordered[k])
+
+    @classmethod
+    def total_weight(cls, series):
+        return sum(series.weights)
+
+
+class OrderFetcher:
+
+    def __init__(
+        self,
+        universe,
+        expire=60,
+        disk_cache=None,
+    ):
+        self.universe = universe
+        # FIXME: Ugh, but we can fix the DI later
+        self.requester = self.universe.requester
+        self.default_expire = expire
+        if disk_cache:
+            self._orders = diskcache.Cache(disk_cache)
+        else:
+            self._orders = diskcache.Cache()
+
+    def get(self, entity, location, expire=None):
+        expire = expire or self.default_expire
+        region = universe.chain(
+            location, "station", "system", "constellation", "region",
+        )
+        key = (entity.id, region.id)
+
+        if key not in self._orders:
+            seq = orders_for_item(self.requester, [region.id], entity.id)
+            self._orders.set(key, list(seq), expire=expire)
+
+        return self._orders[key]
+
+
+class EveMarketMetrics:
+
+    @classmethod
+    def as_series(cls, orders):
+        return WeightedSeries.from_record_sequence(
+            orders,
+            value_key="price",
+            weight_key="volume_total",
+        )
+
+    @classmethod
+    @curry
+    def filter_location(cls, location, orders):
+        return [
+            x for x in orders if x["location_id"] == location.id
+        ]
+
+    @classmethod
+    def filter_buy(cls, orders):
+        return [x for x in orders if x["is_buy_order"]]
+
+    @classmethod
+    def filter_sell(cls, orders):
+        return [x for x in orders if not x["is_buy_order"]]
+
+    @classmethod
+    def local_buy_series(cls, location, orders):
+        return cls.as_series(
+            cls.filter_location(location, cls.filter_buy(orders)),
+        )
+
+    @classmethod
+    def local_sell_series(cls, location, orders):
+        return cls.as_series(
+            cls.filter_location(location, cls.filter_sell(orders)),
+        )
 
 
 item_listing = """
@@ -675,8 +442,6 @@ def _truthy(seq):
 
 
 
-mff = MarketSeriesFactoryFactory(items=items, requester=r0, region_ids=DEFAULT_REGION_IDS)
-
 rig_names_for_sale = [
     "Small Auxiliary Thrusters I",
     "Small Cargohold Optimization I",
@@ -685,9 +450,115 @@ rig_names_for_sale = [
     "Small Polycarbon Engine Housing I",
     "Small Signal Focusing Kit I",
 ]
-rigs_for_sale = entity.from_name_seq(rig_names_for_sale)
-rig_ingredients = {x: blueprints.ingredients(x) for x in rigs_for_sale}
-all_ingredients = Ingredients.sum(rig_ingredients.values())
+rigs = entity.from_name_seq(rig_names_for_sale)
 
+rig = rigs[0].entity
 
 industry = Industry(universe, blueprints)
+
+dodixie_fed = entity.from_name(
+    "Dodixie IX - Moon 20 - Federation Navy Assembly Plant",
+)
+jita_fed = entity.from_name(
+    "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+)
+alentene_roden = entity.from_name(
+    "Alentene VI - Moon 6 - Roden Shipyards Warehouse",
+)
+
+
+class MfgMarket:
+
+    def __init__(
+        self,
+        industry,
+        order_fetcher,
+        sell_station,
+        mfg_station,
+        buy_station=None,
+    ):
+        self.industry = industry
+        self.order_fetcher = order_fetcher
+        self.sell_station = sell_station
+        self.mfg_station = mfg_station
+        self.buy_station = buy_station or sell_station
+
+    def manufacture_metrics(self, entity, alpha=False):
+        return self.industry.installation_cost_verbose(
+            item_entity=entity,
+            facility_entity=self.mfg_station,
+            alpha=alpha,
+        )
+
+    def ingredients_buy(self, entity):
+        ingredients = self.industry.ingredients(entity)
+        result = {
+            e: EveMarketMetrics.local_sell_series(
+                self.buy_station,
+                self.order_fetcher.get(e, self.buy_station),
+            )
+            for (_, _, e) in ingredients.triples()
+        }
+        return result
+
+    def total_cost_with_ingredient_prices(
+        self,
+        entity,
+        ingredient_buy_metric=WeightedSeriesMetrics.percentile(20),
+        item_sell_metric=WeightedSeriesMetrics.minimum,
+        alpha=False,
+    ):
+        prices = valmap(ingredient_buy_metric, self.ingredients_buy(entity))
+        metrics = self.manufacture_metrics(entity, alpha=alpha)
+        ingredients = self.industry.ingredients(entity)
+        mat_prices = {
+            entity: {
+                "individual": prices[entity],
+                "job": quantity * prices[entity],
+            }
+            for (_, quantity, entity) in ingredients.triples()
+        }
+        mat_prices["total"] = sum(entry["job"] for entry in mat_prices.values())
+        sell = item_sell_metric(
+            EveMarketMetrics.local_sell_series(
+                self.sell_station,
+                self.order_fetcher.get(entity, self.sell_station),
+            )
+        )
+        return {
+            "item": entity,
+            "ingredients": ingredients,
+            "base": metrics,
+            "materials": mat_prices,
+            "total": mat_prices["total"] + metrics["base_cost"],
+            "sell_station": self.sell_station,
+            "buy_station": self.buy_station,
+            "sell_price": sell,
+            "profit": (
+                sell - mat_prices["total"] - metrics["base_cost"]
+            ),
+        }
+
+
+order_fetcher = OrderFetcher(universe, expire=120)
+mfg = MfgMarket(
+    Industry(universe, blueprints),
+    order_fetcher,
+    sell_station=dodixie_fed,
+    buy_station=dodixie_fed,
+    mfg_station=alentene_roden,
+)
+mfg_jita = MfgMarket(
+    Industry(universe, blueprints),
+    order_fetcher,
+    sell_station=jita_fed,
+    buy_station=jita_fed,
+    mfg_station=alentene_roden,
+)
+mfg_jita_dodixie = MfgMarket(
+    Industry(universe, blueprints),
+    order_fetcher,
+    sell_station=dodixie_fed,
+    buy_station=jita_fed,
+    mfg_station=alentene_roden,
+)

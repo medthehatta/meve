@@ -147,7 +147,7 @@ class Ingredients(FormalVector):
 
             def _populate(x):
                 entity = items.from_terms(x)
-                return entity.id
+                return entity
 
         else:
             _normalize = None
@@ -168,7 +168,7 @@ class Ingredients(FormalVector):
 
             def _populate(x):
                 entity = items.from_terms(x)
-                return entity.id
+                return entity
 
         else:
             _normalize = None
@@ -180,7 +180,7 @@ class Ingredients(FormalVector):
 
     def from_entities(cls, entities):
         return cls.from_triples(
-            [(entity.name, 1, entity.id) for entity in entities]
+            [(entity.name, 1, entity) for entity in entities]
         )
 
     def from_entity(cls, entity):
@@ -233,8 +233,9 @@ class ItemFactory:
 
 class BlueprintLookup:
 
-    def __init__(self, items):
+    def __init__(self, items, entities):
         self.cache = diskcache.Cache("eve_blueprints")
+        self.entities = entities
 
     def lookup(self, entity):
         entity_id = entity.id
@@ -257,7 +258,11 @@ class BlueprintLookup:
             return Ingredients.zero()
 
         return Ingredients.from_triples(
-            (x["name"], x["quantity"], x["typeid"])
+            (
+                x["name"],
+                x["quantity"],
+                self.entities.strict.from_id(x["typeid"]),
+            )
             for x in data["activityMaterials"]["1"]
         )
 
@@ -385,15 +390,15 @@ class Industry:
     def base_manufacture_cost_verbose(self, entity):
         ingredients = self.blueprints.ingredients(entity)
         pre_price = (
-            (name, quantity, self.adjusted_price(self.universe.from_id(eid)))
-            for (name, quantity, eid) in ingredients.triples()
+            (name, quantity, self.adjusted_price(e), e)
+            for (name, quantity, e) in ingredients.triples()
         )
         ingredient_prices = {
-            name: {
+            e: {
                 "individual": adjusted_price,
                 "job": quantity * adjusted_price,
             }
-            for (name, quantity, adjusted_price) in pre_price
+            for (_, quantity, adjusted_price, e) in pre_price
         }
         ingredient_prices["total"] = sum(
             x["job"] for x in ingredient_prices.values()

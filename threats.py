@@ -116,7 +116,7 @@ from delayed import Delayed
 
 universe = UniverseLookup(r0)
 items = ItemFactory(r0, "types.json")
-blueprints = BlueprintLookup(items)
+#blueprints = BlueprintLookup(items)
 #ua = UserAssets(r, "Mola Pavonis")
 ingredients_parser = lambda s: Ingredients.parse_with_item_lookup(s, items=items)
 
