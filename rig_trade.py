@@ -518,8 +518,7 @@ class MfgMarket:
             alpha=alpha,
         )
 
-    def ingredients_buy(self, entity):
-        ingredients = self.industry.ingredients(entity)
+    def ingredients_buy(self, ingredients):
         result = {
             e: EveMarketMetrics.local_sell_series(
                 self.buy_station,
@@ -535,10 +534,11 @@ class MfgMarket:
         ingredient_buy_metric=WeightedSeriesMetrics.percentile(20),
         item_sell_metric=WeightedSeriesMetrics.minimum,
         alpha=False,
+        make_components=None,
     ):
-        prices = valmap(ingredient_buy_metric, self.ingredients_buy(entity))
+        ingredients = self.industry.ingredients(entity, recurse=make_components)
+        prices = valmap(ingredient_buy_metric, self.ingredients_buy(ingredients))
         metrics = self.manufacture_metrics(entity, alpha=alpha)
-        ingredients = self.industry.ingredients(entity)
         mat_prices = {
             entity: {
                 "individual": prices[entity],

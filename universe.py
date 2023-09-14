@@ -43,7 +43,13 @@ class Entity:
         return f"{self.name or '???'} [id: {self.id or '???'}]"
 
     def __eq__(self, other):
-        return self.id == other.id
+        return (
+            isinstance(other, type(self)) and
+            self.id == other.id
+        )
+
+    def __hash__(self):
+        return hash(self.id)
 
 
 class EntityStrictEvaluator:
@@ -432,11 +438,10 @@ class Industry:
         self._market_prices = None
         self._facility_info = None
 
-    def ingredients(self, entity):
-        return self.blueprints.ingredients(entity)
+    def ingredients(self, entity, *args, **kwargs):
+        return self.blueprints.ingredients(entity, *args, **kwargs)
 
-    def base_manufacture_cost_verbose(self, entity):
-        ingredients = self.blueprints.ingredients(entity)
+    def base_manufacture_cost_verbose(self, ingredients):
         pre_price = (
             (name, quantity, self.adjusted_price(e), e)
             for (name, quantity, e) in ingredients.triples()
@@ -453,8 +458,8 @@ class Industry:
         )
         return ingredient_prices
 
-    def base_manufacture_cost(self, entity):
-        return self.base_manufacture_cost_verbose(entity)["total"]
+    def base_manufacture_cost(self, ingredients):
+        return self.base_manufacture_cost_verbose(ingredients)["total"]
 
     def installation_cost_verbose(
         self,
@@ -462,6 +467,7 @@ class Industry:
         facility_entity,
         alpha=False,
     ):
+        base_ingredients = self.ingredients(item_entity)
         system_entity = self.universe.chain(
             facility_entity,
             "station",
@@ -472,7 +478,7 @@ class Industry:
             raise ValueError(
                 f"System '{system_entity}' does not provide manufacturing"
             )
-        ingredient_prices = self.base_manufacture_cost_verbose(item_entity)
+        ingredient_prices = self.base_manufacture_cost_verbose(base_ingredients)
         # TODO: figure out bonuses
         bonuses = 1
         facility = self.facility(facility_entity)
@@ -481,10 +487,11 @@ class Industry:
                 f"Facility '{facility_entity}' does not provide manufacturing"
             )
         facility_tax = facility.get("tax", 0.25/100)
+        scc_pct = 1.5  # SCC surcharge
         cost = ingredient_prices["total"] * (
             cost_index * bonuses +
             facility_tax +
-            0.25/100 +
+            scc_pct/100 +
             (0.25/100 if alpha else 0)
         )
         return {
