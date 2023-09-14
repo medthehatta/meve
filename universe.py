@@ -2,7 +2,11 @@ import itertools
 import json
 import diskcache
 from functools import wraps
+from functools import partial
+import time
 
+from cytoolz import iterate
+from cytoolz import mapcat
 import requests
 
 from hxxp import DefaultHandlers
@@ -14,6 +18,21 @@ _json = DefaultHandlers.raise_or_return_json
 UNSET = object()
 
 
+def _dbg(x, f, sleep=0):
+    print(f.format(x=x))
+    time.sleep(sleep)
+    return x
+
+
+def expand_lst(func, pred, lst):
+    expanded = lst[:]
+    while any(pred(x) for x in expanded):
+        expanded = list(
+            mapcat(lambda x: func(x) if pred(x) else [x], expanded)
+        )
+    return expanded
+
+
 class Entity:
 
     def __init__(self, entity_id, name):
@@ -22,6 +41,9 @@ class Entity:
 
     def __repr__(self):
         return f"{self.name or '???'} [id: {self.id or '???'}]"
+
+    def __eq__(self, other):
+        return self.id == other.id
 
 
 class EntityStrictEvaluator:
@@ -116,11 +138,17 @@ class LazyEntity(Entity):
 
     @property
     def id(self):
-        return self.entity.id
+        if self._id is not None:
+            return self._id
+        else:
+            return self.entity.id
 
     @property
     def name(self):
-        return self.entity.name
+        if self._name is not None:
+            return self._name
+        else:
+            return self.entity.name
 
     def __repr__(self):
         if self._entity:
@@ -251,20 +279,40 @@ class BlueprintLookup:
 
         return self.cache.get(entity_id)
 
-    def ingredients(self, entity):
+    def _ingredient_triples(self, entity):
         data = self.lookup(entity)
 
         if "activityMaterials" not in data:
-            return Ingredients.zero()
+            return []
 
-        return Ingredients.from_triples(
+        return [
             (
                 x["name"],
                 x["quantity"],
                 self.entities.strict.from_id(x["typeid"]),
             )
             for x in data["activityMaterials"]["1"]
+        ]
+
+    def ingredients(self, entity, recurse=None):
+        if recurse is not None:
+            recurse = recurse + [entity]
+        else:
+            recurse = [entity]
+
+        def _recurse_triples(t):
+            (n, q, e) = t
+            return [
+                (n1, q*q1, e1)
+                for (n1, q1, e1) in self._ingredient_triples(e)
+            ]
+
+        triples = expand_lst(
+            _recurse_triples,
+            lambda x: x[-1] in recurse,
+            [(entity.name, 1, entity)],
         )
+        return Ingredients.from_triples(triples)
 
 
 class UniverseLookup:

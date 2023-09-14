@@ -267,10 +267,10 @@ class OrderFetcher:
         else:
             self._orders = diskcache.Cache()
 
-    def get(self, entity, location, expire=None):
+    def get_for_station(self, entity, station, expire=None):
         expire = expire or self.default_expire
         region = universe.chain(
-            location, "station", "system", "constellation", "region",
+            station, "station", "system", "constellation", "region",
         )
         key = (entity.id, region.id)
 
@@ -279,6 +279,18 @@ class OrderFetcher:
             self._orders.set(key, list(seq), expire=expire)
 
         return self._orders[key]
+
+    def get_for_regions(self, entity, regions, expire=None):
+        expire = expire or self.default_expire
+        for region in regions:
+            key = (entity.id, region.id)
+
+            if key not in self._orders:
+                seq = orders_for_item(self.requester, [region.id], entity.id)
+                self._orders.set(key, list(seq), expire=expire)
+
+        keys = [(entity.id, region.id) for region in regions]
+        return itertools.chain.from_iterable(self._orders[k] for k in keys)
 
 
 class EveMarketMetrics:
@@ -483,6 +495,22 @@ class MfgMarket:
         self.mfg_station = mfg_station
         self.buy_station = buy_station or sell_station
 
+    def variant(
+        self,
+        industry=None,
+        order_fetcher=None,
+        sell_station=None,
+        mfg_station=None,
+        buy_station=None,
+    ):
+        return type(self)(
+            industry=industry or self.industry,
+            order_fetcher=order_fetcher or self.order_fetcher,
+            sell_station=sell_station or self.sell_station,
+            mfg_station=mfg_station or self.mfg_station,
+            buy_station=buy_station or self.buy_station,
+        )
+
     def manufacture_metrics(self, entity, alpha=False):
         return self.industry.installation_cost_verbose(
             item_entity=entity,
@@ -495,7 +523,7 @@ class MfgMarket:
         result = {
             e: EveMarketMetrics.local_sell_series(
                 self.buy_station,
-                self.order_fetcher.get(e, self.buy_station),
+                self.order_fetcher.get_for_station(e, self.buy_station),
             )
             for (_, _, e) in ingredients.triples()
         }
@@ -522,7 +550,7 @@ class MfgMarket:
         sell = item_sell_metric(
             EveMarketMetrics.local_sell_series(
                 self.sell_station,
-                self.order_fetcher.get(entity, self.sell_station),
+                self.order_fetcher.get_for_station(entity, self.sell_station),
             )
         )
         return {
@@ -548,17 +576,5 @@ mfg = MfgMarket(
     buy_station=dodixie_fed,
     mfg_station=alentene_roden,
 )
-mfg_jita = MfgMarket(
-    Industry(universe, blueprints),
-    order_fetcher,
-    sell_station=jita_fed,
-    buy_station=jita_fed,
-    mfg_station=alentene_roden,
-)
-mfg_jita_dodixie = MfgMarket(
-    Industry(universe, blueprints),
-    order_fetcher,
-    sell_station=dodixie_fed,
-    buy_station=jita_fed,
-    mfg_station=alentene_roden,
-)
+mfg_jita_dodixie = mfg.variant(buy_station=jita_fed)
+mfg_jita = mfg_jita_dodixie.variant(sell_station=jita_fed)
