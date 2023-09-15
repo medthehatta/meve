@@ -44,7 +44,10 @@ class Entity:
 
     def __eq__(self, other):
         return (
-            isinstance(other, type(self)) and
+            (
+                isinstance(other, type(self)) or
+                isinstance(self, type(other))
+            ) and
             self.id == other.id
         )
 
@@ -438,10 +441,53 @@ class Industry:
         self._market_prices = None
         self._facility_info = None
 
-    def ingredients(self, entity, *args, **kwargs):
-        return self.blueprints.ingredients(entity, *args, **kwargs)
+    def ingredients(self, entity):
+        return self.blueprints.ingredients(entity)
 
-    def base_manufacture_cost_verbose(self, ingredients):
+    def manufacture(self, item, facility, alpha=False, make_components=None):
+        make_components = make_components or []
+        facility_costs = self._facility_costs(facility, alpha=alpha)
+        return self._manufacture(1, item, facility_costs, make_components)
+
+    def _manufacture(self, quantity, item, facility_costs, make_components=None):
+        make_components = make_components or []
+        ingredients_per_unit = self.ingredients(item)
+        ingredients = quantity * ingredients_per_unit
+        parts_to_make = [
+            (n, quantity, part)
+            for (n, quantity, part) in ingredients.triples()
+            if part in make_components
+        ]
+        raw_ingredients = (
+            ingredients - ingredients.from_triples(parts_to_make)
+        )
+        manufactured_parts = {
+            part: self._manufacture(
+                quantity,
+                part,
+                facility_costs,
+                make_components=make_components,
+            )
+            for (n, quantity, part) in parts_to_make
+        }
+
+        installation = self._installation_cost(ingredients, facility_costs)
+
+        return {
+            "item": item,
+            "runs": quantity,
+            "ingredients": ingredients_per_unit,
+            "raw_ingredients": raw_ingredients + ingredients.sum(
+                part["raw_ingredients"] for part in manufactured_parts.values()
+            ),
+            "installation": installation,
+            "manufactured_parts": manufactured_parts,
+            "base_cost": installation["base_cost"] + sum(
+                part["base_cost"] for part in manufactured_parts.values()
+            ),
+        }
+
+    def _ingredient_prices(self, ingredients):
         pre_price = (
             (name, quantity, self.adjusted_price(e), e)
             for (name, quantity, e) in ingredients.triples()
@@ -458,16 +504,31 @@ class Industry:
         )
         return ingredient_prices
 
-    def base_manufacture_cost(self, ingredients):
-        return self.base_manufacture_cost_verbose(ingredients)["total"]
-
-    def installation_cost_verbose(
+    def _installation_cost(
         self,
-        item_entity,
+        ingredients,
+        facility_costs,
+    ):
+        ingredient_prices = self._ingredient_prices(ingredients)
+        item_value_est = ingredient_prices["total"]
+        cost = item_value_est * (
+            facility_costs["cost_index"] * facility_costs["bonuses"] +
+            facility_costs["tax"] +
+            facility_costs["scc_percent"]/100 +
+            (0.25/100 if facility_costs["alpha"] else 0)
+        )
+
+        return {
+            "ingredients": ingredients,
+            "ingredient_base_prices": ingredient_prices,
+            "base_cost": cost,
+        }
+
+    def _facility_costs(
+        self,
         facility_entity,
         alpha=False,
     ):
-        base_ingredients = self.ingredients(item_entity)
         system_entity = self.universe.chain(
             facility_entity,
             "station",
@@ -478,9 +539,6 @@ class Industry:
             raise ValueError(
                 f"System '{system_entity}' does not provide manufacturing"
             )
-        ingredient_prices = self.base_manufacture_cost_verbose(base_ingredients)
-        # TODO: figure out bonuses
-        bonuses = 1
         facility = self.facility(facility_entity)
         if facility is None:
             raise ValueError(
@@ -488,19 +546,18 @@ class Industry:
             )
         facility_tax = facility.get("tax", 0.25/100)
         scc_pct = 1.5  # SCC surcharge
-        cost = ingredient_prices["total"] * (
-            cost_index * bonuses +
-            facility_tax +
-            scc_pct/100 +
-            (0.25/100 if alpha else 0)
-        )
+
+        # TODO: figure out bonuses
+        bonuses = 1
+
         return {
-            "item": item_entity,
-            "facility": facility_entity,
-            "facility_info": facility,
+            "system": system_entity,
+            "facility": facility,
+            "cost_index": cost_index,
+            "tax": facility_tax,
+            "scc_percent": scc_pct,
+            "bonuses": bonuses,
             "alpha": alpha,
-            "ingredients": ingredient_prices,
-            "base_cost": cost,
         }
 
     def adjusted_price(self, item_entity):
