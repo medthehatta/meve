@@ -454,48 +454,23 @@ def _truthy(seq):
 
 
 
-rig_names_for_sale = [
-    "Small Auxiliary Thrusters I",
-    "Small Cargohold Optimization I",
-    "Small Hyperspatial Velocity Optimizer I",
-    "Small Low Friction Nozzle Joints I",
-    "Small Polycarbon Engine Housing I",
-    "Small Signal Focusing Kit I",
-]
-rigs = entity.from_name_seq(rig_names_for_sale)
-
-rig = rigs[0].entity
-
-industry = Industry(universe, blueprints)
-
-dodixie_fed = entity.from_name(
-    "Dodixie IX - Moon 20 - Federation Navy Assembly Plant",
-)
-jita_fed = entity.from_name(
-    "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
-)
-alentene_roden = entity.from_name(
-    "Alentene VI - Moon 6 - Roden Shipyards Warehouse",
-)
-
-
 class MfgMarket:
 
     def __init__(
         self,
         industry,
         order_fetcher,
-        sell_station,
         mfg_station,
+        sell_station=None,
         buy_station=None,
         broker_fee_percent=3,
         accounting_level=0,
     ):
         self.industry = industry
         self.order_fetcher = order_fetcher
-        self.sell_station = sell_station
         self.mfg_station = mfg_station
-        self.buy_station = buy_station or sell_station
+        self.buy_station = buy_station or sell_station or mfg_station
+        self.sell_station = sell_station or buy_station or mfg_station
         self.broker_fee_percent = broker_fee_percent
         self.accounting_level = accounting_level
 
@@ -596,14 +571,51 @@ class MfgMarket:
         }
 
 
+rig_names_for_sale = [
+    "Small Auxiliary Thrusters I",
+    "Small Cargohold Optimization I",
+    "Small Hyperspatial Velocity Optimizer I",
+    "Small Low Friction Nozzle Joints I",
+    "Small Polycarbon Engine Housing I",
+    "Small Signal Focusing Kit I",
+]
+rigs = entity.from_name_seq(rig_names_for_sale)
+
+rig = rigs[0].entity
+
+industry = Industry(universe, blueprints)
+
+dodixie_fed = entity.from_name(
+    "Dodixie IX - Moon 20 - Federation Navy Assembly Plant",
+)
+jita_44 = entity.from_name(
+    "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+)
+alentene_roden = entity.from_name(
+    "Alentene VI - Moon 6 - Roden Shipyards Warehouse",
+)
+stacmon_fed = entity.from_name(
+    "Stacmon V - Moon 9 - Federation Navy Assembly Plant",
+)
+
+
 order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=200)
-mfg = MfgMarket(
+
+mfg_dodixie = MfgMarket(
     Industry(universe, blueprints),
     order_fetcher,
-    sell_station=dodixie_fed,
-    buy_station=dodixie_fed,
-    mfg_station=alentene_roden,
+    mfg_station=dodixie_fed,
     accounting_level=3,
 )
-mfg_jita_dodixie = mfg.variant(buy_station=jita_fed)
-mfg_jita = mfg_jita_dodixie.variant(sell_station=jita_fed)
+mfg_jita = MfgMarket(
+    Industry(universe, blueprints),
+    order_fetcher,
+    mfg_station=jita_44,
+    accounting_level=3,
+)
+mfg_stacmon = MfgMarket(
+    Industry(universe, blueprints),
+    order_fetcher,
+    mfg_station=stacmon_fed,
+    accounting_level=3,
+)
