@@ -522,6 +522,7 @@ class Industry:
             "ingredients": ingredients,
             "ingredient_base_prices": ingredient_prices,
             "base_cost": cost,
+            "facility_costs": facility_costs,
         }
 
     def _facility_costs(
@@ -673,7 +674,7 @@ class UserAssets:
     def update_smart_avg_buy(self):
         last = self.cache.get(self.last_key(), default="")
         new_purchases = self.purchases(since=last)
-        new_avgs = self._average_purchase_prices(new_purchases)
+        new_avgs = self._average_transaction_prices(new_purchases)
         new_amts = self._total_quantities(new_purchases)
         current_quantities = self.total_quantities()
 
@@ -737,15 +738,32 @@ class UserAssets:
             )
         ]
 
-    def _average_purchase_prices(self, purchases):
+    def sales(self, since=None, until=None):
+        transactions = self.transactions()
+        return [
+            {
+                "date": x["date"],
+                "type_id": x["type_id"],
+                "quantity": x["quantity"],
+                "unit_price": x["unit_price"],
+            }
+            for x in transactions
+            if (
+                not x["is_buy"]
+                and (x["date"] >= since if since else True)
+                and (x["date"] <= until if until else True)
+            )
+        ]
+
+    def _average_transaction_prices(self, transactions):
         acquired = {}
         spent = {}
-        for purchase in purchases:
-            type_id = purchase["type_id"]
-            acquired[type_id] = acquired.get(type_id, 0) + purchase["quantity"]
+        for transaction in transactions:
+            type_id = transaction["type_id"]
+            acquired[type_id] = acquired.get(type_id, 0) + transaction["quantity"]
             spent[type_id] = (
                 spent.get(type_id, 0)
-                + purchase["quantity"]*purchase["unit_price"]
+                + transaction["quantity"]*transaction["unit_price"]
             )
         avg = {k: spent[k] / acquired[k] for k in acquired}
         return avg

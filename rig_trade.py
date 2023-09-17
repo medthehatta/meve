@@ -488,12 +488,16 @@ class MfgMarket:
         sell_station,
         mfg_station,
         buy_station=None,
+        broker_fee_percent=3,
+        accounting_level=0,
     ):
         self.industry = industry
         self.order_fetcher = order_fetcher
         self.sell_station = sell_station
         self.mfg_station = mfg_station
         self.buy_station = buy_station or sell_station
+        self.broker_fee_percent = broker_fee_percent
+        self.accounting_level = accounting_level
 
     def variant(
         self,
@@ -502,6 +506,8 @@ class MfgMarket:
         sell_station=None,
         mfg_station=None,
         buy_station=None,
+        broker_fee_percent=None,
+        accounting_level=None,
     ):
         return type(self)(
             industry=industry or self.industry,
@@ -509,6 +515,8 @@ class MfgMarket:
             sell_station=sell_station or self.sell_station,
             mfg_station=mfg_station or self.mfg_station,
             buy_station=buy_station or self.buy_station,
+            broker_fee_percent=broker_fee_percent or self.broker_fee_percent,
+            accounting_level=accounting_level or self.accounting_level,
         )
 
     def manufacture_metrics(self, entity, alpha=False):
@@ -536,9 +544,17 @@ class MfgMarket:
         alpha=False,
         make_components=None,
     ):
-        ingredients = self.industry.ingredients(entity, recurse=make_components)
-        prices = valmap(ingredient_buy_metric, self.ingredients_buy(ingredients))
-        metrics = self.manufacture_metrics(entity, alpha=alpha)
+        manufacture = self.industry.manufacture(
+            entity,
+            self.mfg_station,
+            alpha=alpha,
+            make_components=make_components,
+        )
+        ingredients = manufacture["raw_ingredients"]
+        prices = valmap(
+            ingredient_buy_metric,
+            self.ingredients_buy(ingredients),
+        )
         mat_prices = {
             entity: {
                 "individual": prices[entity],
@@ -553,28 +569,41 @@ class MfgMarket:
                 self.order_fetcher.get_for_station(entity, self.sell_station),
             )
         )
+        sales_tax_rate = 8*(1 - 0.11/100 * self.accounting_level)/100
+        sales_tax = sales_tax_rate * sell
+        broker_fee = max(100, self.broker_fee_percent/100 * sell)
         return {
             "item": entity,
-            "ingredients": ingredients,
-            "base": metrics,
-            "materials": mat_prices,
-            "total": mat_prices["total"] + metrics["base_cost"],
             "sell_station": self.sell_station,
             "buy_station": self.buy_station,
+            "manufacture": manufacture,
+            "materials": mat_prices,
+            "total": mat_prices["total"] + manufacture["base_cost"],
             "sell_price": sell,
+            "profit_no_fees": (
+                sell - mat_prices["total"] - manufacture["base_cost"]
+            ),
+            "sales_tax": sales_tax,
+            "broker_fee": broker_fee,
             "profit": (
-                sell - mat_prices["total"] - metrics["base_cost"]
+                sell - sum([
+                    mat_prices["total"],
+                    manufacture["base_cost"],
+                    sales_tax,
+                    broker_fee,
+                ])
             ),
         }
 
 
-order_fetcher = OrderFetcher(universe, expire=120)
+order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=200)
 mfg = MfgMarket(
     Industry(universe, blueprints),
     order_fetcher,
     sell_station=dodixie_fed,
     buy_station=dodixie_fed,
     mfg_station=alentene_roden,
+    accounting_level=3,
 )
 mfg_jita_dodixie = mfg.variant(buy_station=jita_fed)
 mfg_jita = mfg_jita_dodixie.variant(sell_station=jita_fed)
