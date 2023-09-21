@@ -1,5 +1,4 @@
 import datetime
-import itertools
 import json
 import os
 import sqlite3
@@ -24,13 +23,23 @@ def dict_db(path):
 
 class TrackedMap:
 
-    def __init__(self, path, value_type=str, default=UNSET):
+
+    def __init__(
+        self,
+        path,
+        default,
+        encoder=str,
+        decoder=str,
+        missing_is_change=True,
+    ):
         self.path = path
-        self.value_type = value_type
-        self.default = self.value_type() if default is UNSET else default
+        self.encoder = encoder
+        self.decoder = decoder
+        self.default = self.encoder(default)
         self.db_path = os.path.join(self.path, "db")
         self.snap_path = os.path.join(self.path, "snap")
         self.snap_ts_path = os.path.join(self.path, "snaptime")
+        self.missing_is_change = missing_is_change
 
     @property
     def db(self):
@@ -59,12 +68,28 @@ class TrackedMap:
         with open(self.snap_path, "r") as f:
             return json.load(f)
 
+    def _preprocess(self, data):
+        snap = self.read_snap()
+        data1 = {str(k): self.encoder(v) for (k, v) in data.items()}
+        # If missing keys count as "removing" the entry, default the missing
+        # entries in the data.
+        if self.missing_is_change:
+            missing = {k: self.default for k in snap if k not in data1}
+            return {**missing, **data1}
+        # Otherwise, if missing keys just mean we should keep the existing
+        # value, hydrate the rest of the data with values from the snap.
+        else:
+            return {**snap, **data1}
+
     def write_snap(self, data, timestamp=None):
         timestamp = timestamp or datetime.datetime.now().timestamp()
+        data = self._preprocess(data)
+
         if not os.path.exists(self.path):
             os.makedirs(self.path)
-        with open(self.snap_ts_path, "w") as f:
-            json.dump({"timestamp": timestamp}, f)
+        if timestamp > self.last_snap_time():
+            with open(self.snap_ts_path, "w") as f:
+                json.dump({"timestamp": timestamp}, f)
         with open(self.snap_path, "w") as f:
             return json.dump(data, f)
 
@@ -76,30 +101,32 @@ class TrackedMap:
 
     def differences(self, data):
         snap = self.read_snap()
-        all_keys = unique(itertools.chain(data.keys(), snap.keys()))
+        to_compare = self._preprocess(data)
+
+        all_keys = to_compare.keys()
         return {
-            k: data.get(k, self.default) for k in all_keys
-            if data.get(k) != snap.get(k)
+            k: to_compare[k] for k in all_keys
+            if to_compare[k] != snap.get(k)
         }
 
     def to_row_seq(self, data, **meta):
         return [
-            {**meta, "key": k, "value": str(v)}
+            {**meta, "key": k, "value": v}
             for (k, v) in data.items()
         ]
 
-    def record(self, data):
+    def record(self, data, timestamp):
         self.ensure_tables()
-        now = datetime.datetime.now().timestamp()
+        ts = timestamp or datetime.datetime.now().timestamp()
         delta = self.differences(data)
-        self.write_snap(data, timestamp=now)
+        self.write_snap(data, timestamp=timestamp)
         with self.db:
             self.db.executemany(
                 (
                     "INSERT INTO updates (timestamp, key, value) "
                     "VALUES (:ts, :key, :value);"
                 ),
-                self.to_row_seq(delta, ts=now),
+                self.to_row_seq(delta, ts=ts),
             )
             self.db.commit()
 
@@ -110,8 +137,9 @@ class TrackedMap:
         with self.db:
             res = self.db.execute(
                 (
-                    "SELECT timestamp,value FROM updates WHERE "
-                    "key=:key AND timestamp > :before;"
+                    "SELECT timestamp,key,value FROM updates WHERE "
+                    "key=:key AND timestamp > :before "
+                    "ORDER BY timestamp ASC;"
                 ),
                 {"key": key, "before": before},
             ).fetchall()
@@ -119,9 +147,36 @@ class TrackedMap:
             {
                 **record,
                 "value": (
-                    self.value_type(record["value"])
+                    self.decoder(record["value"])
                     if record["value"] is not None else self.default
                 ),
             }
             for record in res
         ]
+
+    def value_and_time_data(self, when=None):
+        when = when or datetime.datetime.now().timestamp()
+
+        with self.db:
+            res = self.db.execute(
+                (
+                    "SELECT timestamp,key,value FROM updates WHERE "
+                    "timestamp <= :when ORDER BY timestamp ASC;"
+                ),
+                {"when": when},
+            ).fetchall()
+
+        result = {}
+        time_data = {}
+
+        for update in res:
+            time_data[update["key"]] = {
+                "timestamp": update["timestamp"],
+                "value": self.decoder(update["value"]),
+            }
+            result[update["key"]] = self.decoder(update["value"])
+
+        return (result, time_data)
+
+    def value(self, when=None):
+        return self.value_and_time_data(when)[0]

@@ -1,3 +1,8 @@
+import itertools
+import datetime
+from pprint import pprint
+import pickle
+
 from api_access import requester
 from api_access import authed_requester
 
@@ -25,18 +30,23 @@ ua = UserAssets(r, "Mola Pavonis")
 
 
 names_for_sale = [
-    "Small Auxiliary Thrusters I",
-    "Small Cargohold Optimization I",
-    "Small Hyperspatial Velocity Optimizer I",
-    "Small Low Friction Nozzle Joints I",
-    "Small Polycarbon Engine Housing I",
+    # over 100k profit per unit
     "Small Signal Focusing Kit I",
-    # new
-    "Core Probe Launcher I",
-]
-merchandise = entity.from_name_seq(names_for_sale)
+    "Small Polycarbon Engine Housing I",
 
-merch = merchandise[0].entity
+    # over 50k profit per unit
+    "Small Hyperspatial Velocity Optimizer I",
+    "Large Cap Battery I",
+
+    # still profitable
+    "Small Low Friction Nozzle Joints I",
+    "Small Auxiliary Thrusters I",
+    "Core Probe Launcher I",
+
+    # not profitable
+    #"Small Cargohold Optimization I",
+]
+merch = entity.from_name_seq(names_for_sale)
 
 industry = Industry(universe, blueprints)
 
@@ -54,7 +64,7 @@ stacmon_fed = entity.from_name(
 )
 
 
-order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=200)
+order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=300)
 
 mfg_dodixie = MfgMarket(
     Industry(universe, blueprints),
@@ -76,7 +86,7 @@ mfg_stacmon = MfgMarket(
 )
 
 
-def multilookup(mfg, entities):
+def multilookup(mfg, entities, save=True):
     foo = {}
     for entity in entities:
         name = entity.name
@@ -86,4 +96,38 @@ def multilookup(mfg, entities):
             print(f"{name}: {foo[name]['profit']}")
         except ValueError as err:
             print(f"{name}: {err}")
+    if save:
+        now = datetime.datetime.now().strftime("%Y-%m-%dT%H%M")
+        with open(f"merch/{now}.merch", "wb") as f:
+            pickle.dump(foo, f)
     return foo
+
+
+# my_merch = multilookup(mfg_dodixie, merch)
+with open("merch/2023-09-21T0758.merch", "rb") as f:
+    my_merch = pickle.load(f)
+
+numbering = {i: k for (i, k) in enumerate(my_merch.keys(), start=1)}
+r_numbering = {v: k for (k, v) in numbering.items()}
+
+
+def ls():
+    profits(my_merch)
+
+
+def view(i):
+    pprint(my_merch[numbering[i]])
+
+
+def profits(merch_dict):
+    entries = sorted([(v["profit"], k) for (k, v) in merch_dict.items()], reverse=True)
+
+    bins = [500, 100, 50, 0]
+
+    for (up, down) in zip(bins, bins[1:]):
+        print(f"# Over {down}k profit")
+        for (p, e) in entries:
+            i = r_numbering[e]
+            if down*1000 < p <= up*1000:
+                print(f"{i}) {p} | {e}")
+        print("")

@@ -1,8 +1,7 @@
-import json
-from functools import reduce
+import datetime
 
 from hxxp import DefaultHandlers
-from saved_accumulator import SavedAccumulator
+from tracked_map import TrackedMap
 
 
 _json = DefaultHandlers.raise_or_return_json
@@ -46,22 +45,10 @@ def rolling_weighted_dict_average(acc, seq):
 
 class UserAssets:
 
-    def __init__(self, requester, character_name, path=None):
+    def __init__(self, requester, character_name):
         self.requester = requester
         self.character_name = character_name
         self._character_id = None
-        self._smart_avg_buy = SavedAccumulator(
-            accumulator=self._accum_avg,
-            path=f"{character_name}-avg-buy.uadb",
-            dumper=json.dump,
-            loader=json.load,
-        )
-        self._smart_avg_sell = SavedAccumulator(
-            accumulator=self._accum_avg,
-            path=f"{character_name}-avg-sell.uadb",
-            dumper=json.dump,
-            loader=json.load,
-        )
 
     @property
     def character_id(self):
@@ -84,6 +71,15 @@ class UserAssets:
         return _json(
             self.requester.request("GET", f"/characters/{self.character_id}/assets")
         )
+
+    def wallet_journal(self):
+        data = _json(
+            self.requester.request(
+                "GET",
+                f"/characters/{self.character_id}/wallet/journal",
+            )
+        )
+        return data
 
     def transactions(self):
         data = _json(
@@ -127,41 +123,6 @@ class UserAssets:
                 and (x["date"] <= until if until else True)
             )
         ]
-
-    def _accum_avg(self, acc, seq):
-        return rolling_weighted_dict_average(
-            acc,
-            (
-                {
-                    "weight": x["quantity"],
-                    "value": x["unit_price"],
-                    "key": x["type_id"],
-                }
-                for x in seq
-            ),
-        )
-
-    def smart_avg_buy(self, type_id, default=UNSET):
-        data = self._smart_avg_buy.read()
-        if type_id in data:
-            return data[type_id]
-        elif default is UNSET:
-            raise LookupError(type_id)
-        else:
-            return default
-
-    def smart_avg_sell(self, type_id, default=UNSET):
-        data = self._smart_avg_sell.read()
-        if type_id in data:
-            return data[type_id]
-        elif default is UNSET:
-            raise LookupError(type_id)
-        else:
-            return default
-
-    def update_aggregates(self):
-        self._smart_avg_buy.aggregate(self.purchases())
-        self._smart_avg_sell.aggregate(self.sales())
 
     def total_quantities(self):
         entries = self.assets()
