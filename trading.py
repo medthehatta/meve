@@ -1,3 +1,4 @@
+import glob
 import itertools
 import datetime
 from pprint import pprint
@@ -86,48 +87,116 @@ mfg_stacmon = MfgMarket(
 )
 
 
-def multilookup(mfg, entities, save=True):
-    foo = {}
-    for entity in entities:
-        name = entity.name
-        print(f"{name}...")
-        try:
-            foo[name] = mfg.total_cost_with_ingredient_prices(entity)
-            print(f"{name}: {foo[name]['profit']}")
-        except ValueError as err:
-            print(f"{name}: {err}")
-    if save:
-        now = datetime.datetime.now().strftime("%Y-%m-%dT%H%M")
-        with open(f"merch/{now}.merch", "wb") as f:
-            pickle.dump(foo, f)
-    return foo
+class MerchManager:
 
+    save_date_format = "%Y-%m-%dT%H%M"
 
-# my_merch = multilookup(mfg_dodixie, merch)
-with open("merch/2023-09-21T0758.merch", "rb") as f:
-    my_merch = pickle.load(f)
+    @classmethod
+    def save_tpl(cls):
+        return "merch/{key}.merch"
 
-numbering = {i: k for (i, k) in enumerate(my_merch.keys(), start=1)}
-r_numbering = {v: k for (k, v) in numbering.items()}
+    @classmethod
+    def from_multilookup(cls, mfg, entities, save=True):
+        merch = {}
+        for entity in entities:
+            name = entity.name
+            print(f"{name}...")
+            try:
+                merch[name] = mfg.total_cost_with_ingredient_prices(entity)
+                print(f"{name}: {merch[name]['profit']}")
+            except ValueError as err:
+                print(f"{name}: {err}")
+        if save:
+            tpl = cls.save_tpl()
+            now = datetime.datetime.now().strftime(cls.save_date_format)
+            path = tpl.format(key=now)
+            with open(path, "wb") as f:
+                pickle.dump(merch, f)
+        return cls(merch)
 
+    @classmethod
+    def get_saves(cls):
+        tpl = cls.save_tpl()
+        entries = sorted(glob.glob(tpl.format(key="*")), reverse=True)
+        timestamps = [
+            datetime.datetime.strptime(
+                entry,
+                tpl.format(key=cls.save_date_format),
+            ).timestamp()
+            for entry in entries
+        ]
+        return list(zip(timestamps, entries))
 
-def ls():
-    profits(my_merch)
+    @classmethod
+    def most_recent_save(cls):
+        tpl = cls.save_tpl()
+        return max(glob.glob(tpl.format(key="*")))
 
+    @classmethod
+    def latest_save_before(cls, before_ts):
+        saves = cls.get_saves()
+        return next(
+            (path for (ts, path) in saves if ts <= before_ts),
+            None,
+        )
 
-def view(i):
-    pprint(my_merch[numbering[i]])
+    @classmethod
+    def latest_save_days_back(cls, days_back):
+        cutoff = datetime.datetime.now() - datetime.timedelta(days=days_back)
+        return cls.latest_save_before(cutoff.timestamp())
 
+    @classmethod
+    def from_save(cls, path):
+        with open(path, "rb") as f:
+            merch = pickle.load(f)
+            return cls(merch)
 
-def profits(merch_dict):
-    entries = sorted([(v["profit"], k) for (k, v) in merch_dict.items()], reverse=True)
+    @classmethod
+    def latest(cls, before=None):
+        if before is None:
+            before = (
+                datetime.datetime.now() + datetime.timedelta(minutes=1)
+            ).timestamp()
+        path = cls.latest_save_before(before)
+        if not path:
+            raise RuntimeError(f"No save available before {before}")
+        return cls.from_save(path)
 
-    bins = [500, 100, 50, 0]
+    def __init__(self, merch):
+        self.merch = merch
 
-    for (up, down) in zip(bins, bins[1:]):
-        print(f"# Over {down}k profit")
-        for (p, e) in entries:
-            i = r_numbering[e]
-            if down*1000 < p <= up*1000:
-                print(f"{i}) {p} | {e}")
-        print("")
+    def by_profit(self):
+        return sorted(
+            [(v["profit"], k) for (k, v) in self.merch.items()],
+            reverse=True,
+        )
+
+    @property
+    def numbering(self):
+        return {
+            i: k for (i, k) in enumerate(self.merch.keys(), start=1)
+        }
+
+    @property
+    def reversed_numbering(self):
+        return {v: k for (k, v) in self.numbering.items()}
+
+    def profits(self):
+        entries = self.by_profit()
+
+        bins = [500, 100, 50, 0]
+
+        for (up, down) in zip(bins, bins[1:]):
+            print(f"# Over {down}k profit")
+            for (p, e) in entries:
+                i = self.reversed_numbering[e]
+                if down*1000 < p <= up*1000:
+                    print(f"{i}) {p} | {e}")
+            print("")
+
+    def ls(self):
+        pprint(self.numbering)
+
+    def view(self, i):
+        pprint(self.merch[self.numbering[i]])
+
