@@ -57,6 +57,8 @@ class WeightedSeriesMetrics:
     @classmethod
     @curry
     def percentile(cls, pct, series):
+        if not series:
+            return None
         seq = series.values
         ordered = sorted(seq)
         N = len(ordered)

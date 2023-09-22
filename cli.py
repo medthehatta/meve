@@ -19,7 +19,7 @@ from purchase_tour import item_to_location_candidates
 from universe import ItemFactory
 from universe import UniverseLookup
 from universe import station_lookup
-from universe import BlueprintLookup
+from industry import BlueprintLookup
 
 
 TIME_COSTS = {

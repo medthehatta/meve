@@ -100,10 +100,34 @@ class BlueprintLookup:
 
         return self.cache.get(entity_id)
 
+    def craft_type(self, entity):
+        data = self.lookup(entity)
+        return (
+            "manufacturing" if data.get("activityMaterials", {}).get("1") else
+            "reactions" if data.get("activityMaterials", {}).get("11") else
+            "unknown"
+        )
+
     def _ingredient_triples(self, entity):
         data = self.lookup(entity)
 
         if "activityMaterials" not in data:
+            return []
+
+        if (
+            "1" in data["activityMaterials"] and
+            "11" in data["activityMaterials"]
+        ):
+            print(
+                f"Found both manufacturing and reaction processes for "
+                f"{entity}; assuming manufacturing"
+            )
+            materials = data["activityMaterials"]["1"]
+        elif "1" in data["activityMaterials"]:
+            materials = data["activityMaterials"]["1"]
+        elif "11" in data["activityMaterials"]:
+            materials = data["activityMaterials"]["11"]
+        else:
             return []
 
         return [
@@ -112,7 +136,7 @@ class BlueprintLookup:
                 x["quantity"],
                 self.entities.strict.from_id(x["typeid"]),
             )
-            for x in data["activityMaterials"]["1"]
+            for x in materials
         ]
 
     def ingredients(self, entity, recurse=None):
@@ -150,31 +174,35 @@ class Industry:
     def ingredients(self, entity):
         return self.blueprints.ingredients(entity)
 
-    def manufacture(self, item, facility, alpha=False, make_components=None):
-        make_components = make_components or []
-        facility_costs = self._facility_costs(facility, alpha=alpha)
-        return self._manufacture(1, item, facility_costs, make_components)
+    def craft_type(self, entity):
+        return self.blueprints.craft_type(entity)
 
-    def _manufacture(self, quantity, item, facility_costs, make_components=None):
-        make_components = make_components or []
+    def craft(self, item, facility, alpha=False, recurse=None):
+        recurse = recurse or []
+        facility_costs = self._facility_costs(facility, alpha=alpha)
+        return self._craft(1, item, facility_costs, recurse)
+
+    def _craft(self, quantity, item, facility_costs, recurse=None):
+        recurse = recurse or []
         ingredients_per_unit = self.ingredients(item)
+        craft_type = self.craft_type(item)
         if ingredients_per_unit == ingredients_per_unit.zero():
             raise ValueError(f"{item} is not craftable")
         ingredients = quantity * ingredients_per_unit
         parts_to_make = [
             (n, quantity, part)
             for (n, quantity, part) in ingredients.triples()
-            if part in make_components
+            if part in recurse
         ]
         raw_ingredients = (
             ingredients - ingredients.from_triples(parts_to_make)
         )
-        manufactured_parts = {
-            part: self._manufacture(
+        crafted_parts = {
+            part: self._craft(
                 quantity,
                 part,
                 facility_costs,
-                make_components=make_components,
+                recurse=recurse,
             )
             for (n, quantity, part) in parts_to_make
         }
@@ -184,14 +212,15 @@ class Industry:
         return {
             "item": item,
             "runs": quantity,
+            "craft_type": craft_type,
             "ingredients": ingredients_per_unit,
             "raw_ingredients": raw_ingredients + ingredients.sum(
-                part["raw_ingredients"] for part in manufactured_parts.values()
+                part["raw_ingredients"] for part in crafted_parts.values()
             ),
             "installation": installation,
-            "manufactured_parts": manufactured_parts,
+            "crafted_parts": crafted_parts,
             "base_cost": installation["base_cost"] + sum(
-                part["base_cost"] for part in manufactured_parts.values()
+                part["base_cost"] for part in crafted_parts.values()
             ),
         }
 
@@ -366,7 +395,7 @@ class MfgMarket:
             accounting_level=accounting_level or self.accounting_level,
         )
 
-    def manufacture_metrics(self, entity, alpha=False):
+    def craft_metrics(self, entity, alpha=False):
         return self.industry.installation_cost_verbose(
             item_entity=entity,
             facility_entity=self.mfg_station,
@@ -389,15 +418,15 @@ class MfgMarket:
         ingredient_buy_metric=WeightedSeriesMetrics.percentile(20),
         item_sell_metric=WeightedSeriesMetrics.minimum,
         alpha=False,
-        make_components=None,
+        recurse=None,
     ):
-        manufacture = self.industry.manufacture(
+        craft = self.industry.craft(
             entity,
             self.mfg_station,
             alpha=alpha,
-            make_components=make_components,
+            recurse=recurse,
         )
-        ingredients = manufacture["raw_ingredients"]
+        ingredients = craft["raw_ingredients"]
         prices = valmap(
             ingredient_buy_metric,
             self.ingredients_buy(ingredients),
@@ -423,19 +452,19 @@ class MfgMarket:
             "item": entity,
             "sell_station": self.sell_station,
             "buy_station": self.buy_station,
-            "manufacture": manufacture,
+            "craft": craft,
             "materials": mat_prices,
-            "total": mat_prices["total"] + manufacture["base_cost"],
+            "total": mat_prices["total"] + craft["base_cost"],
             "sell_price": sell,
             "profit_no_fees": (
-                sell - mat_prices["total"] - manufacture["base_cost"]
+                sell - mat_prices["total"] - craft["base_cost"]
             ),
             "sales_tax": sales_tax,
             "broker_fee": broker_fee,
             "profit": (
                 sell - sum([
                     mat_prices["total"],
-                    manufacture["base_cost"],
+                    craft["base_cost"],
                     sales_tax,
                     broker_fee,
                 ])

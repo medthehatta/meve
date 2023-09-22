@@ -285,10 +285,14 @@ class UniverseLookup:
         elif name:
             id_ = self.from_name(name).id
 
-        kind = kind.lower().rstrip("s")
-        return _json(
-            self.requester.request("GET", f"/universe/{kind}s/{id_}")
-        )
+        if ("detail", kind, id_) not in self.cache:
+            kind = kind.lower().rstrip("s")
+            result = _json(
+                self.requester.request("GET", f"/universe/{kind}s/{id_}")
+            )
+            self.cache.set(("detail", kind, id_), result)
+
+        return self.cache.get(("detail", kind, id_))
 
     def chain_seq(self, entity, k_chain, default=UNSET):
         ka_chain = [(a, f"{b}_id") for (a, b) in zip(k_chain, k_chain[1:])]
