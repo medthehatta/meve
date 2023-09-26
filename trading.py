@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from collections import Counter
 import glob
 import itertools
 import datetime
@@ -15,10 +16,16 @@ from industry import Industry
 from industry import MfgMarket
 
 from market import OrderFetcher
+from market import EveMarketMetrics
+
+import sheets as sh
+from sheets import service_login
 
 from universe import UniverseLookup
 from universe import ItemFactory
 from universe import EntityFactory
+
+from weighted_series import WeightedSeriesMetrics
 
 r0 = requester
 r = authed_requester
@@ -29,6 +36,12 @@ items = ItemFactory(r0, "types.json")
 entity = EntityFactory(items, universe)
 blueprints = BlueprintLookup(items, entity)
 ua = UserAssets(r, "Mola Pavonis")
+
+sheets_client = service_login("service-account.json")
+eve_trading_sheet = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1gbsmO3Gl1qBk8uEDaZOIiVNefPdhxDWIN8T0KbzSlKs"
+)
 
 
 names_for_sale = [
@@ -233,3 +246,141 @@ class MerchManager:
     def view(self, i):
         pprint(self.merch[self.numbering[i]])
 
+
+def recipe_grid(blueprints, output_ids, input_ids):
+    result = []
+
+    for outp in output_ids:
+        ing_triples = blueprints.ingredients(entity.from_id(outp)).triples()
+        ing_dict = {
+            entity.id: quantity for (_, quantity, entity) in ing_triples
+        }
+
+        result.append([ing_dict.get(int(inp), 0) for inp in input_ids])
+
+    return result
+
+
+spreadsheet = sheets_client.open_by_url(eve_trading_sheet)
+recipe_sheet = spreadsheet.worksheet("Recipes")
+product_sheet = spreadsheet.worksheet("Products")
+ingredient_sheet = spreadsheet.worksheet("Ingredients")
+
+
+REGIONS = entity.from_names(
+    "Sinq Laison",
+    "The Forge",
+    "Verge Vendor",
+    "Placid",
+    "Essence",
+)
+
+
+p10 = WeightedSeriesMetrics.percentile(10)
+p20 = WeightedSeriesMetrics.percentile(20)
+p80 = WeightedSeriesMetrics.percentile(80)
+p90 = WeightedSeriesMetrics.percentile(90)
+average = WeightedSeriesMetrics.average
+minimum = WeightedSeriesMetrics.minimum
+maximum = WeightedSeriesMetrics.maximum
+
+
+def relevant_sell(entity):
+    orders = order_fetcher.get_for_regions(entity, REGIONS)
+    return EveMarketMetrics.as_series(
+        EveMarketMetrics.filter_sell(orders),
+    )
+
+
+def relevant_buy(entity):
+    orders = order_fetcher.get_for_regions(entity, REGIONS)
+    return EveMarketMetrics.as_series(
+        EveMarketMetrics.filter_buy(orders),
+    )
+
+
+def dodixie_sell(entity):
+    orders = order_fetcher.get_for_station(entity, dodixie_fed)
+    return EveMarketMetrics.as_series(
+        EveMarketMetrics.filter_location(
+            dodixie_fed,
+            EveMarketMetrics.filter_sell(orders),
+        ),
+    )
+
+
+def dodixie_buy(entity):
+    orders = order_fetcher.get_for_station(entity, dodixie_fed)
+    return EveMarketMetrics.as_series(
+        EveMarketMetrics.filter_location(
+            dodixie_fed,
+            EveMarketMetrics.filter_buy(orders),
+        ),
+    )
+
+
+def update_sheet(spreadsheet, ua, entity, mm=None):
+    product_sheet = spreadsheet.worksheet("Products")
+    ingredient_sheet = spreadsheet.worksheet("Ingredients")
+
+    product_ids = product_sheet.get_values("ProductIDs")
+    ingredient_ids = ingredient_sheet.get_values("IngredientIDs")
+
+    def map_product_ids_to_col(output_col, func):
+        return product_sheet.update(
+            output_col,
+            sh.threadmap_col_range(func, product_ids),
+        )
+
+    def map_ingredient_ids_to_col(output_col, func):
+        return ingredient_sheet.update(
+            output_col,
+            sh.threadmap_col_range(func, ingredient_ids),
+        )
+
+    # Update stock of products and ingredients
+    print("Reading inventory...")
+    tots = ua.total_quantities()
+    print("Updating product stock...")
+    map_product_ids_to_col("ProductStock", lambda x: tots.get(int(x), 0))
+    print("Updating ingredient stock...")
+    map_ingredient_ids_to_col("IngredientStock", lambda x: tots.get(int(x), 0))
+
+    # Update order volume of products
+    print("Reading orders...")
+    order_volume = {}
+    for order in ua.orders():
+        ent = order["type_id"]
+        order_volume[ent] = order_volume.get(ent, 0) + order["volume_remain"]
+    print("Updating product order volume...")
+    map_product_ids_to_col("ProductOrderVolume", lambda x: order_volume.get(int(x), 0))
+
+    # Update sell p10, dodixie sell p10 products
+    print("Updating product relevant sell...")
+    map_product_ids_to_col(
+        "ProductSellP10",
+        lambda x: p10(relevant_sell(entity.from_id(x).entity)),
+    )
+    print("Updating product dodixie sell...")
+    map_product_ids_to_col(
+        "ProductDodixieSellP10",
+        lambda x: p10(dodixie_sell(entity.from_id(x).entity)),
+    )
+
+    # Update sell p20, dodixie sell p20, dodixie buy p90 ingredients
+    print("Updating ingredient dodixie sell...")
+    map_ingredient_ids_to_col(
+        "IngredientDodixieSellP20",
+        lambda x: p20(dodixie_sell(entity.from_id(x).entity)),
+    )
+    print("Updating ingredient dodixie buy...")
+    map_ingredient_ids_to_col(
+        "IngredientDodixieBuyP90",
+        lambda x: p90(dodixie_buy(entity.from_id(x).entity)),
+    )
+
+    if mm is not None:
+        map_product_ids_to_col(
+            "ProductCraftCost",
+            lambda x: mm.merch.get(entity.from_id(x).entity, {}).get("total", -1)
+        )

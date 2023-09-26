@@ -101,7 +101,6 @@ from purchase_tour import orders_in_regions
 from purchase_tour import orders_for_item_at_location
 from purchase_tour import orders_for_item_in_system
 from cli import DEFAULT_REGION_NAMES
-from delayed import Delayed
 
 
 universe = UniverseLookup(r0)

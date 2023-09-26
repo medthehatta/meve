@@ -4,3 +4,8 @@ diskcache
 networkx
 requests
 formal-vector @ git+https://github.com/medthehatta/formal-vector
+
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+gspread
