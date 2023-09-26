@@ -124,6 +124,14 @@ class UserAssets:
             )
         ]
 
+    def orders(self):
+        return _json(
+            self.requester.request(
+                "GET",
+                f"/characters/{self.character_id}/orders",
+            )
+        )
+
     def total_quantities(self):
         entries = self.assets()
         acquired = {}
