@@ -132,10 +132,20 @@ class UserAssets:
             )
         )
 
+    def jobs(self):
+        return _json(
+            self.requester.request(
+                "GET",
+                f"/characters/{self.character_id}/industry/jobs",
+            )
+        )
+
     def total_quantities(self):
-        entries = self.assets()
-        acquired = {}
-        for entry in entries:
-            type_id = entry["type_id"]
-            acquired[type_id] = acquired.get(type_id, 0) + entry["quantity"]
-        return acquired
+        return self.aggregate_on_field("quantity", self.assets())
+
+    def aggregate_on_field(self, field, data, type_field="type_id"):
+        results = {}
+        for datum in data:
+            type_id = datum[type_field]
+            results[type_id] = results.get(type_id, 0) + datum[field]
+        return results

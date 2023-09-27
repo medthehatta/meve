@@ -276,13 +276,13 @@ REGIONS = entity.from_names(
 )
 
 
-p10 = WeightedSeriesMetrics.percentile(10)
-p20 = WeightedSeriesMetrics.percentile(20)
-p80 = WeightedSeriesMetrics.percentile(80)
-p90 = WeightedSeriesMetrics.percentile(90)
-average = WeightedSeriesMetrics.average
-minimum = WeightedSeriesMetrics.minimum
-maximum = WeightedSeriesMetrics.maximum
+p10 = lambda x: WeightedSeriesMetrics.percentile(10, x) or None
+p20 = lambda x: WeightedSeriesMetrics.percentile(20, x) or None
+p80 = lambda x: WeightedSeriesMetrics.percentile(80, x) or None
+p90 = lambda x: WeightedSeriesMetrics.percentile(90, x) or None
+average = lambda x: WeightedSeriesMetrics.average(x) or None
+minimum = lambda x: WeightedSeriesMetrics.minimum(x) or None
+maximum = lambda x: WeightedSeriesMetrics.maximum(x) or None
 
 
 def relevant_sell(entity):
@@ -319,7 +319,7 @@ def dodixie_buy(entity):
     )
 
 
-def update_sheet(spreadsheet, ua, entity, mm=None):
+def update_sheet(spreadsheet, ua, entity, do_merch=False):
     product_sheet = spreadsheet.worksheet("Products")
     ingredient_sheet = spreadsheet.worksheet("Ingredients")
 
@@ -348,12 +348,19 @@ def update_sheet(spreadsheet, ua, entity, mm=None):
 
     # Update order volume of products
     print("Reading orders...")
-    order_volume = {}
-    for order in ua.orders():
-        ent = order["type_id"]
-        order_volume[ent] = order_volume.get(ent, 0) + order["volume_remain"]
+    order_volume = ua.aggregate_on_field("volume_remain", ua.orders())
     print("Updating product order volume...")
     map_product_ids_to_col("ProductOrderVolume", lambda x: order_volume.get(int(x), 0))
+
+    # Update craft volume of products
+    print("Reading jobs...")
+    craft_volume = ua.aggregate_on_field(
+        "runs",
+        ua.jobs(),
+        type_field="product_type_id",
+    )
+    print("Updating product job volume...")
+    map_product_ids_to_col("ProductCraftVolume", lambda x: craft_volume.get(int(x), 0))
 
     # Update sell p10, dodixie sell p10 products
     print("Updating product relevant sell...")
@@ -379,7 +386,13 @@ def update_sheet(spreadsheet, ua, entity, mm=None):
         lambda x: p90(dodixie_buy(entity.from_id(x).entity)),
     )
 
-    if mm is not None:
+    if do_merch:
+        print("Fetching crafting data...")
+        mm = MerchManager.from_multilookup(
+            mfg_dodixie,
+            entity.from_id_seq(sh.get_col_range(product_ids)),
+        )
+        print("Updating crafting profits...")
         map_product_ids_to_col(
             "ProductCraftCost",
             lambda x: mm.merch.get(entity.from_id(x).entity, {}).get("total", -1)
