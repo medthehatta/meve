@@ -61,6 +61,8 @@ class WeightedSeriesMetrics:
             return None
         seq = series.values
         ordered = sorted(seq)
+        if not ordered:
+            return None
         N = len(ordered)
         k_d = (pct/100) * N
         k = int(k_d)

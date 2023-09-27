@@ -434,11 +434,14 @@ class MfgMarket:
         mat_prices = {
             entity: {
                 "individual": prices[entity],
-                "job": quantity * prices[entity],
+                "job": quantity * prices.get(entity) if prices.get(entity) else None,
             }
             for (_, quantity, entity) in ingredients.triples()
         }
-        mat_prices["total"] = sum(entry["job"] for entry in mat_prices.values())
+        if all(v is not None for v in prices.values()):
+            mat_prices["total"] = sum(entry["job"] for entry in mat_prices.values())
+        else:
+            mat_prices["total"] = None
         sell = item_sell_metric(
             EveMarketMetrics.local_sell_series(
                 self.sell_station,
@@ -454,10 +457,14 @@ class MfgMarket:
             "buy_station": self.buy_station,
             "craft": craft,
             "materials": mat_prices,
-            "total": mat_prices["total"] + craft["base_cost"],
+            "total": (
+                mat_prices["total"] + craft["base_cost"]
+                if mat_prices["total"] is not None else None
+            ),
             "sell_price": sell,
             "profit_no_fees": (
                 sell - mat_prices["total"] - craft["base_cost"]
+                if mat_prices["total"] is not None else None
             ),
             "sales_tax": sales_tax,
             "broker_fee": broker_fee,
@@ -468,5 +475,6 @@ class MfgMarket:
                     sales_tax,
                     broker_fee,
                 ])
+                if mat_prices["total"] is not None else None
             ),
         }
