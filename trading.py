@@ -276,6 +276,7 @@ REGIONS = entity.from_names(
 )
 
 
+p1 = lambda x: WeightedSeriesMetrics.percentile(1, x) or None
 p10 = lambda x: WeightedSeriesMetrics.percentile(10, x) or None
 p20 = lambda x: WeightedSeriesMetrics.percentile(20, x) or None
 p80 = lambda x: WeightedSeriesMetrics.percentile(80, x) or None
@@ -342,15 +343,15 @@ def update_sheet(spreadsheet, ua, entity, do_merch=False):
     print("Reading inventory...")
     tots = ua.total_quantities()
     print("Updating product stock...")
-    map_product_ids_to_col("ProductStock", lambda x: tots.get(int(x), 0))
+    map_product_ids_to_col("ProductStock", lambda x: tots.get(int(x) if x else None, 0))
     print("Updating ingredient stock...")
-    map_ingredient_ids_to_col("IngredientStock", lambda x: tots.get(int(x), 0))
+    map_ingredient_ids_to_col("IngredientStock", lambda x: tots.get(int(x) if x else None, 0))
 
     # Update order volume of products
     print("Reading orders...")
     order_volume = ua.aggregate_on_field("volume_remain", ua.orders())
     print("Updating product order volume...")
-    map_product_ids_to_col("ProductOrderVolume", lambda x: order_volume.get(int(x), 0))
+    map_product_ids_to_col("ProductOrderVolume", lambda x: order_volume.get(int(x) if x else None, 0))
 
     # Update craft volume of products
     print("Reading jobs...")
@@ -360,18 +361,18 @@ def update_sheet(spreadsheet, ua, entity, do_merch=False):
         type_field="product_type_id",
     )
     print("Updating product job volume...")
-    map_product_ids_to_col("ProductCraftVolume", lambda x: craft_volume.get(int(x), 0))
+    map_product_ids_to_col("ProductCraftVolume", lambda x: craft_volume.get(int(x) if x else None, 0))
 
     # Update sell p10, dodixie sell p10 products
     print("Updating product relevant sell...")
     map_product_ids_to_col(
         "ProductSellP10",
-        lambda x: p10(relevant_sell(entity.from_id(x).entity)),
+        lambda x: p1(relevant_sell(entity.from_id(x).entity)),
     )
     print("Updating product dodixie sell...")
     map_product_ids_to_col(
         "ProductDodixieSellP10",
-        lambda x: p10(dodixie_sell(entity.from_id(x).entity)),
+        lambda x: p1(dodixie_sell(entity.from_id(x).entity)),
     )
 
     # Update sell p20, dodixie sell p20, dodixie buy p90 ingredients
