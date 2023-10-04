@@ -4,6 +4,7 @@ from cytoolz import mapcat
 import diskcache
 
 from market import EveMarketMetrics
+from market import OrderCalc
 from weighted_series import WeightedSeriesMetrics
 from hxxp import DefaultHandlers
 from formal_vector import FormalVector
@@ -448,9 +449,13 @@ class MfgMarket:
                 self.order_fetcher.get_for_station(entity, self.sell_station),
             )
         )
-        sales_tax_rate = 8*(1 - 0.11/100 * self.accounting_level)/100
-        sales_tax = sales_tax_rate * sell
-        broker_fee = max(100, self.broker_fee_percent/100 * sell)
+        order_calc = OrderCalc(
+            broker_fee_percent=self.broker_fee_percent,
+            accounting_level=self.accounting_level,
+        )
+        sale = order_calc.sale_cost(sell)
+        sales_tax = sale["sales_tax"]
+        broker_fee = sale["broker_fee"]
         return {
             "item": entity,
             "sell_station": self.sell_station,
