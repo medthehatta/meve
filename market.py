@@ -133,3 +133,20 @@ class EveMarketMetrics:
         return cls.as_series(
             cls.filter_location(location, cls.filter_sell(orders)),
         )
+
+
+class OrderCalc:
+
+    def __init__(self, broker_fee_percent=3, accounting_level=0):
+        self.broker_fee_percent = broker_fee_percent
+        self.accounting_level = accounting_level
+
+    def sale_cost(self, price):
+        sales_tax_rate = 8*(1 - 0.11/100 * self.accounting_level)/100
+        sales_tax = sales_tax_rate * price
+        broker_fee = max(100, self.broker_fee_percent/100 * price)
+        return {
+            "total": sales_tax + broker_fee,
+            "sales_tax": sales_tax,
+            "broker_fee": broker_fee,
+        }

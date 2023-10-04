@@ -15,6 +15,7 @@ from industry import BlueprintLookup
 from industry import Industry
 from industry import MfgMarket
 
+from market import OrderCalc
 from market import OrderFetcher
 from market import EveMarketMetrics
 
@@ -130,14 +131,14 @@ class MerchManager:
         return "merch/{key}.merch"
 
     @classmethod
-    def from_multilookup(cls, mfg, entities, save=True, threads=4):
+    def from_multilookup(cls, mfg, entities, save=True, threads=4, recurse=None):
 
         def _total_cost(entity):
             result = None
             name = entity.name
             print(f"{name}...")
             try:
-                result = mfg.total_cost_with_ingredient_prices(entity)
+                result = mfg.total_cost_with_ingredient_prices(entity, recurse=recurse)
                 print(f"{name}: {result['profit']}")
             except ValueError as err:
                 print(f"{name}: {err}")
@@ -300,8 +301,8 @@ def relevant_buy(entity):
     )
 
 
-def dodixie_sell(entity):
-    orders = order_fetcher.get_for_station(entity, dodixie_fed)
+def station_sell(station, entity):
+    orders = order_fetcher.get_for_station(entity, station)
     return EveMarketMetrics.as_series(
         EveMarketMetrics.filter_location(
             dodixie_fed,
@@ -310,8 +311,8 @@ def dodixie_sell(entity):
     )
 
 
-def dodixie_buy(entity):
-    orders = order_fetcher.get_for_station(entity, dodixie_fed)
+def station_buy(station, entity):
+    orders = order_fetcher.get_for_station(entity, station)
     return EveMarketMetrics.as_series(
         EveMarketMetrics.filter_location(
             dodixie_fed,
@@ -320,9 +321,12 @@ def dodixie_buy(entity):
     )
 
 
-def update_sheet(spreadsheet, ua, entity, do_merch=False):
+def update_sheet(spreadsheet, ua, entity, station, do_merch=False):
+    meta_sheet = spreadsheet.worksheet("Meta")
     product_sheet = spreadsheet.worksheet("Products")
     ingredient_sheet = spreadsheet.worksheet("Ingredients")
+
+    meta_sheet.update("A1", [[station.name]])
 
     product_ids = product_sheet.get_values("ProductIDs")
     ingredient_ids = ingredient_sheet.get_values("IngredientIDs")
@@ -341,7 +345,13 @@ def update_sheet(spreadsheet, ua, entity, do_merch=False):
 
     # Update stock of products and ingredients
     print("Reading inventory...")
-    tots = ua.total_quantities()
+    tots = ua.aggregate_on_field(
+        "quantity",
+        (
+            asset for asset in ua.assets()
+            if asset["location_id"] == station.id
+        ),
+    )
     print("Updating product stock...")
     map_product_ids_to_col("ProductStock", lambda x: tots.get(int(x) if x else None, 0))
     print("Updating ingredient stock...")
@@ -363,38 +373,52 @@ def update_sheet(spreadsheet, ua, entity, do_merch=False):
     print("Updating product job volume...")
     map_product_ids_to_col("ProductCraftVolume", lambda x: craft_volume.get(int(x) if x else None, 0))
 
-    # Update sell p10, dodixie sell p10 products
+    # Update sell p10, station sell p10 products
     print("Updating product relevant sell...")
     map_product_ids_to_col(
         "ProductSellP10",
         lambda x: p1(relevant_sell(entity.from_id(x).entity)),
     )
-    print("Updating product dodixie sell...")
+    print("Updating product station sell...")
     map_product_ids_to_col(
         "ProductDodixieSellP10",
-        lambda x: p1(dodixie_sell(entity.from_id(x).entity)),
+        lambda x: p1(station_sell(station, entity.from_id(x).entity)),
     )
 
-    # Update sell p20, dodixie sell p20, dodixie buy p90 ingredients
-    print("Updating ingredient dodixie sell...")
+    # Update sell p20, station sell p20, station buy p90 ingredients
+    print("Updating ingredient station sell...")
     map_ingredient_ids_to_col(
         "IngredientDodixieSellP20",
-        lambda x: p20(dodixie_sell(entity.from_id(x).entity)),
+        lambda x: p20(station_sell(station, entity.from_id(x).entity)),
     )
-    print("Updating ingredient dodixie buy...")
+    print("Updating ingredient station buy...")
     map_ingredient_ids_to_col(
         "IngredientDodixieBuyP90",
-        lambda x: p90(dodixie_buy(entity.from_id(x).entity)),
+        lambda x: p90(station_buy(station, entity.from_id(x).entity)),
     )
 
     if do_merch:
         print("Fetching crafting data...")
+        mfg = MfgMarket(
+            Industry(universe, blueprints),
+            order_fetcher,
+            mfg_station=station,
+            accounting_level=3,
+        )
         mm = MerchManager.from_multilookup(
-            mfg_dodixie,
+            mfg,
             entity.from_id_seq(sh.get_col_range(product_ids)),
         )
         print("Updating crafting profits...")
         map_product_ids_to_col(
             "ProductCraftCost",
-            lambda x: mm.merch.get(entity.from_id(x).entity, {}).get("total", -1)
+            lambda x: (mm.merch.get(entity.from_id(x).entity) or {}).get("total", -1)
         )
+
+
+# def reprocess_flip(spreadsheet, ua, entity, station):
+#     order_calc = OrderCalc(
+#         broker_fee_percent=3,
+#         accounting_level=4,
+#     )
+#     return order_calc.sale_cost(sell_price)
