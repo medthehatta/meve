@@ -359,9 +359,19 @@ def update_sheet(spreadsheet, ua, entity, station, do_merch=False):
 
     # Update order volume of products
     print("Reading orders...")
-    order_volume = ua.aggregate_on_field("volume_remain", ua.orders())
+    orders = ua.orders()
+    order_volume = ua.aggregate_on_field("volume_remain", orders)
+    min_sell = {}
+    for x in orders:
+        type_id = x["type_id"]
+        min_sell[type_id] = (
+            min(min_sell[type_id], x["price"]) if type_id in min_sell
+            else x["price"]
+        )
     print("Updating product order volume...")
     map_product_ids_to_col("ProductOrderVolume", lambda x: order_volume.get(int(x) if x else None, 0))
+    print("Updating product sale prices...")
+    map_product_ids_to_col("MinOrderPrice", lambda x: min_sell.get(int(x) if x else None, 0))
 
     # Update craft volume of products
     print("Reading jobs...")
@@ -422,3 +432,18 @@ def update_sheet(spreadsheet, ua, entity, station, do_merch=False):
 #         accounting_level=4,
 #     )
 #     return order_calc.sale_cost(sell_price)
+
+
+def ore_variants(ore, *variants):
+    return [
+        " ".join([compression, modifier, ore]).strip()
+        for (compression, modifier, ore) in
+        itertools.product(
+            ["", "compressed", "batch compressed"],
+            itertools.chain([""], variants),
+            [ore],
+        )
+    ]
+
+def print_ore_variants(ore, *variants):
+    return print("\n".join(ore_variants(ore, *variants)))
