@@ -143,9 +143,15 @@ class UserAssets:
     def total_quantities(self):
         return self.aggregate_on_field("quantity", self.assets())
 
-    def aggregate_on_field(self, field, data, type_field="type_id"):
+    def aggregate_on_field(
+        self,
+        field,
+        data,
+        type_field="type_id",
+        agg=lambda x, y: x + y,
+    ):
         results = {}
         for datum in data:
             type_id = datum[type_field]
-            results[type_id] = results.get(type_id, 0) + datum[field]
+            results[type_id] = agg(results.get(type_id, 0), datum[field])
         return results
