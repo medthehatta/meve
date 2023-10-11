@@ -248,18 +248,23 @@ class MerchManager:
         pprint(self.merch[self.numbering[i]])
 
 
-def recipe_grid(blueprints, output_ids, input_ids):
-    result = []
+def recipe_grid(blueprints, entities):
+    ings = set([])
+    rows = []
 
-    for outp in output_ids:
-        ing_triples = blueprints.ingredients(entity.from_id(outp)).triples()
+    for outp in entities:
+        ing_triples = blueprints.ingredients(outp).triples()
+        ings = ings.union([entity for (_, _, entity) in ing_triples])
         ing_dict = {
             entity.id: quantity for (_, quantity, entity) in ing_triples
         }
+        rows.append({"Product": outp.name, "ID": outp.id, **ing_dict})
 
-        result.append([ing_dict.get(int(inp), 0) for inp in input_ids])
-
-    return result
+    all_ings = list(ings)
+    yield (["", "Ingredient"] + [x.name for x in all_ings])
+    yield (["Product", "ID"] + [x.id for x in all_ings])
+    for row in rows:
+        yield ([row["Product"], row["ID"]] + [row.get(x.id, 0) for x in all_ings])
 
 
 spreadsheet = sheets_client.open_by_url(eve_trading_sheet)
@@ -321,7 +326,7 @@ def station_buy(station, entity):
     )
 
 
-def update_sheet(spreadsheet, ua, entity, station, do_merch=False):
+def update_sheet(spreadsheet, ua, entity, industry, station):
     meta_sheet = spreadsheet.worksheet("Meta")
     product_sheet = spreadsheet.worksheet("Products")
     ingredient_sheet = spreadsheet.worksheet("Ingredients")
@@ -407,23 +412,12 @@ def update_sheet(spreadsheet, ua, entity, station, do_merch=False):
         lambda x: p90(station_buy(station, entity.from_id(x).entity)),
     )
 
-    if do_merch:
-        print("Fetching crafting data...")
-        mfg = MfgMarket(
-            Industry(universe, blueprints),
-            order_fetcher,
-            mfg_station=station,
-            accounting_level=3,
-        )
-        mm = MerchManager.from_multilookup(
-            mfg,
-            entity.from_id_seq(sh.get_col_range(product_ids)),
-        )
-        print("Updating crafting profits...")
-        map_product_ids_to_col(
-            "ProductCraftCost",
-            lambda x: (mm.merch.get(entity.from_id(x).entity) or {}).get("total", -1)
-        )
+    print("Updating ingredient base costs...")
+    mp = industry.market_prices()
+    map_ingredient_ids_to_col(
+        "IngredientBaseCost",
+        lambda x: mp["adjusted"][int(x)],
+    )
 
 
 # def reprocess_flip(spreadsheet, ua, entity, station):
