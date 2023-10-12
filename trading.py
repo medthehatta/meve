@@ -87,7 +87,7 @@ yona_core = entity.from_name(
     "Yona II - Core Complexion Inc. Factory",
 )
 
-order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=600)
+order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=1200)
 
 mfg_dodixie = MfgMarket(
     Industry(universe, blueprints),
@@ -281,6 +281,10 @@ REGIONS = entity.from_names(
     "Essence",
 )
 
+def pctl(k):
+    def _pctl(x):
+        return WeightedSeriesMetrics.percentile(k, x)
+    return _pctl
 
 p1 = lambda x: WeightedSeriesMetrics.percentile(1, x) or None
 p10 = lambda x: WeightedSeriesMetrics.percentile(10, x) or None
@@ -324,6 +328,350 @@ def station_buy(station, entity):
             EveMarketMetrics.filter_buy(orders),
         ),
     )
+
+
+class SheetInterface:
+
+    def __init__(
+        self,
+        spreadsheet,
+        ua,
+        entity,
+        order_fetcher,
+        industry,
+        blueprints,
+        station,
+    ):
+        self.spreadsheet = spreadsheet
+        self.ua = ua
+        self.entity = entity
+        self.order_fetcher = order_fetcher
+        self.industry = industry
+        self.blueprints = blueprints
+        self.station = station
+        self._sheets = None
+        self._translators = {
+            "col": (sh.get_col_range, sh.to_col_range),
+            "row": (sh.get_row_range, sh.to_row_range),
+        }
+        self._default_translators = (lambda x: x, lambda x: x)
+        self._product_ids = None
+        self._ingredient_ids = None
+
+    @property
+    def sheets(self):
+        if self._sheets is None:
+            known_sheets = [
+                "Meta",
+                "Facility",
+                "Products",
+                "Ingredients",
+                "Recipes",
+            ]
+            self._sheets = {
+                k.lower().replace(" ", ""): self.spreadsheet.worksheet(k)
+                for k in known_sheets
+            }
+
+        return self._sheets
+
+    def translators(self, name):
+        return self._translators.get(name.lower(), self._default_translators)
+
+    def dictmap_list_to_list(self, dic, lst, default=None):
+        return [dic.get(x, default) for x in lst]
+
+    def threadmap_list_to_list(self, func, lst, max_workers=4):
+        with ThreadPoolExecutor(max_workers=max_workers) as exe:
+            return list(exe.map(func, lst))
+
+    def sheet_threadmap(
+        self,
+        func,
+        inp,
+        xinp="",
+        xout="col",
+        max_workers=4,
+    ):
+        (inp_read, _) = self.translators(xinp)
+        (_, out_write) = self.translators(xout)
+        xs = inp_read(inp)
+        ys = self.threadmap_list_to_list(func, xs, max_workers=max_workers)
+        return out_write(ys)
+
+    def sheet_dictmap(
+        self,
+        dic,
+        inp,
+        xinp="",
+        xout="col",
+        default=None,
+    ):
+        (inp_read, _) = self.translators(xinp)
+        (_, out_write) = self.translators(xout)
+        xs = inp_read(inp)
+        ys = self.dictmap_list_to_list(dic, xs, default=default)
+        return out_write(ys)
+
+    @property
+    def product_ids(self):
+        if self._product_ids is None:
+            self._product_ids = self.get_product_ids()
+        return self._product_ids
+
+    def get_product_ids(self):
+        return [
+            int(x) if x else None
+            for x in sh.get_col_range(
+                self.sheets["products"].get_values("ProductIDs")
+            )
+        ]
+
+    def update_product_ids(self):
+        self._product_ids = None
+        return self.product_ids
+
+    @property
+    def ingredient_ids(self):
+        if self._ingredient_ids is None:
+            self._ingredient_ids = self.get_ingredient_ids()
+        return self._ingredient_ids
+
+    def get_ingredient_ids(self):
+        return [
+            int(x) if x else None
+            for x in sh.get_col_range(
+                self.sheets["ingredients"].get_values("IngredientIDs")
+            )
+        ]
+
+    def update_ingredient_ids(self):
+        self._ingredient_ids = None
+        return self._ingredient_ids
+
+    def apply_product_dict(self, dic, cell_range, default=0):
+        return self.sheets["products"].update(
+            range_name=cell_range,
+            values=self.sheet_dictmap(dic, self.product_ids, default=default),
+        )
+
+    def apply_ingredient_dict(self, dic, cell_range, default=0):
+        return self.sheets["ingredients"].update(
+            range_name=cell_range,
+            values=self.sheet_dictmap(
+                dic,
+                self.ingredient_ids,
+                default=default,
+            ),
+        )
+
+    def update_stock(self):
+        tots = self.ua.aggregate_on_field(
+            "quantity",
+            (
+                asset for asset in self.ua.assets()
+                if asset["location_id"] == self.station.id
+            ),
+        )
+        self.apply_product_dict(tots, "ProductStock")
+        self.apply_ingredient_dict(tots, "IngredientStock")
+
+    def update_orders(self):
+        orders = self.ua.orders()
+        order_volume = self.ua.aggregate_on_field("volume_remain", orders)
+        self.apply_product_dict(order_volume, "ProductOrderVolume")
+
+        min_sell = {}
+        for x in orders:
+            type_id = x["type_id"]
+            min_sell[type_id] = (
+                min(min_sell[type_id], x["price"]) if type_id in min_sell
+                else x["price"]
+            )
+
+        self.apply_product_dict(min_sell, "MinOrderPrice")
+
+    def update_jobs(self):
+        craft_volume = self.ua.aggregate_on_field(
+            "runs",
+            self.ua.jobs(),
+            type_field="product_type_id",
+        )
+        self.apply_product_dict(craft_volume, "ProductCraftVolume")
+
+    def update_ingredient_base(self):
+        mp = self.industry.market_prices()
+        self.apply_ingredient_dict(mp["adjusted"], "IngredientBaseCost")
+
+    def update_product_prices(self, max_workers=6):
+
+        product_ids = self.product_ids
+
+        by_id = self._fetch_orders_by_id(product_ids, max_workers=max_workers)
+
+        metrics = {
+            x: self._market_metrics_from_orders(by_id, x)
+            for x in product_ids
+        }
+        result = {}
+        for x in metrics:
+            for col in metrics[x]:
+                if col not in result:
+                    result[col] = {}
+                result[col][x] = metrics[x][col]
+
+        for k in result:
+            self.apply_product_dict(
+                result[k],
+                f"Product {k}".replace(" ", ""),
+            )
+
+    def update_ingredient_prices(self, max_workers=6):
+
+        ingredient_ids = self.ingredient_ids
+
+        by_id = self._fetch_orders_by_id(
+            ingredient_ids,
+            max_workers=max_workers,
+        )
+
+        metrics = {
+            x: self._market_metrics_from_orders(by_id, x)
+            for x in ingredient_ids
+        }
+        result = {}
+        for x in metrics:
+            for col in metrics[x]:
+                if col not in result:
+                    result[col] = {}
+                result[col][x] = metrics[x][col]
+
+        for k in result:
+            self.apply_ingredient_dict(
+                result[k],
+                f"Ingredient {k}".replace(" ", ""),
+            )
+
+    def _fetch_orders_by_id(self, ids, max_workers=6):
+        with ThreadPoolExecutor(max_workers=max_workers) as exe:
+            entity_orders = list(
+                exe.map(
+                    lambda x: list(
+                        self.order_fetcher.get_for_regions(
+                            self.entity.strict.from_id(x),
+                            REGIONS,
+                        ),
+                    ),
+                    ids,
+                )
+            )
+
+        return dict(zip(ids, entity_orders))
+
+    def _market_metrics_from_orders(self, by_id, x):
+        return {
+            "Dodixie Sell p1": p1(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        dodixie_fed,
+                        EveMarketMetrics.filter_sell(by_id[x]),
+                    ),
+                ),
+            ),
+            "Dodixie Sell p20": p20(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        dodixie_fed,
+                        EveMarketMetrics.filter_sell(by_id[x]),
+                    ),
+                ),
+            ),
+            "Dodixie Buy p90": p90(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        dodixie_fed,
+                        EveMarketMetrics.filter_buy(by_id[x]),
+                    ),
+                ),
+            ),
+            "Jita Sell p1": p1(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        jita_44,
+                        EveMarketMetrics.filter_sell(by_id[x]),
+                    ),
+                ),
+            ),
+            "Jita Sell p20": p20(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        jita_44,
+                        EveMarketMetrics.filter_sell(by_id[x]),
+                    ),
+                ),
+            ),
+            "Jita Buy p90": p90(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        jita_44,
+                        EveMarketMetrics.filter_buy(by_id[x]),
+                    ),
+                ),
+            ),
+            "Zone Sell p1": p1(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_sell(by_id[x]),
+                ),
+            ),
+            "Zone Sell p20": p20(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_sell(by_id[x]),
+                ),
+            ),
+            "Zone Buy p90": p90(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_buy(by_id[x]),
+                ),
+            ),
+        }
+
+    def update_recipes(self):
+        ings = set([])
+        rows = []
+
+        entities = self.entity.from_id_seq(self.product_ids)
+
+        for outp in entities:
+            ing_triples = blueprints.ingredients(outp).triples()
+            ings = ings.union([entity for (_, _, entity) in ing_triples])
+            ing_dict = {
+                entity.id: quantity for (_, quantity, entity) in ing_triples
+            }
+            rows.append({"Product": outp.name, "ID": outp.id, **ing_dict})
+
+        all_ings = list(ings)
+        result = []
+        result.append(["", "Ingredient"] + [x.name for x in all_ings])
+        result.append(["Product", "ID"] + [x.id for x in all_ings])
+        for row in rows:
+            result.append([row["Product"], row["ID"]] + [row.get(x.id, 0) for x in all_ings])
+        self.sheets["recipes"].update(range_name="A2", values=result)
+
+    def update(self):
+        print("Updating recipes...")
+        self.update_recipes()
+        print("Updating stock...")
+        self.update_stock()
+        print("Updating orders...")
+        self.update_orders()
+        print("Updating jobs...")
+        self.update_jobs()
+        print("Updating ingredient base prices...")
+        self.update_ingredient_base()
+        print("Updating ingredient market prices...")
+        self.update_ingredient_prices()
+        print("Updating product market prices...")
+        self.update_product_prices()
 
 
 def update_sheet(spreadsheet, ua, entity, industry, station):
@@ -439,5 +787,9 @@ def ore_variants(ore, *variants):
         )
     ]
 
+
 def print_ore_variants(ore, *variants):
     return print("\n".join(ore_variants(ore, *variants)))
+
+
+si = SheetInterface(spreadsheet, ua, entity, order_fetcher, industry, blueprints, dodixie_fed)
