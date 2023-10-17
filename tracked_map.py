@@ -115,7 +115,7 @@ class TrackedMap:
             for (k, v) in data.items()
         ]
 
-    def record(self, data, timestamp):
+    def record(self, data, timestamp=None):
         self.ensure_tables()
         ts = timestamp or datetime.datetime.now().timestamp()
         delta = self.differences(data)

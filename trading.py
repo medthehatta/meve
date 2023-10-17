@@ -6,6 +6,8 @@ import datetime
 from pprint import pprint
 import pickle
 
+from cytoolz import get
+
 from api_access import requester
 from api_access import authed_requester
 
@@ -21,6 +23,8 @@ from market import EveMarketMetrics
 
 import sheets as sh
 from sheets import service_login
+
+from tracked_map import TrackedMap
 
 from universe import UniverseLookup
 from universe import ItemFactory
@@ -87,7 +91,7 @@ yona_core = entity.from_name(
     "Yona II - Core Complexion Inc. Factory",
 )
 
-order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=1200)
+order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=300)
 
 mfg_dodixie = MfgMarket(
     Industry(universe, blueprints),
@@ -357,6 +361,13 @@ class SheetInterface:
         self._default_translators = (lambda x: x, lambda x: x)
         self._product_ids = None
         self._ingredient_ids = None
+        self._inventory_map = TrackedMap(
+            "inventory_map",
+            default=0,
+            encoder=int,
+            decoder=int,
+            missing_is_change=True,
+        )
 
     @property
     def sheets(self):
@@ -367,6 +378,9 @@ class SheetInterface:
                 "Products",
                 "Ingredients",
                 "Recipes",
+                "Market Transactions",
+                "Transaction Import",
+                "Inventory Import",
             ]
             self._sheets = {
                 k.lower().replace(" ", ""): self.spreadsheet.worksheet(k)
@@ -415,9 +429,7 @@ class SheetInterface:
 
     @property
     def product_ids(self):
-        if self._product_ids is None:
-            self._product_ids = self.get_product_ids()
-        return self._product_ids
+        return self.get_product_ids()
 
     def get_product_ids(self):
         return [
@@ -657,6 +669,67 @@ class SheetInterface:
             result.append([row["Product"], row["ID"]] + [row.get(x.id, 0) for x in all_ings])
         self.sheets["recipes"].update(range_name="A2", values=result)
 
+    def import_transactions(self):
+        xaction_sheet = self.sheets["markettransactions"]
+        import_sheet = self.sheets["transactionimport"]
+        xaction_records = [
+            record for record in
+            xaction_sheet.get_all_records()
+            if record.get("Date")
+        ]
+        import_records = sorted(
+            import_sheet.get_all_records(),
+            key=lambda x: x["Date"],
+        )
+        # Plus 1 because the header is in the sheet but not counted in the
+        # record list
+        last_row_index = len(xaction_records) + 1
+
+        # Find the last 2 transactions in the transaction list in the import
+        # list
+        relevant = [
+            "Date",
+            "Amount",
+            "Item",
+            "Unit Price (str)",
+            "Total Received",
+            "Other Party",
+            "Location",
+        ]
+        last_xaction = xaction_records[-1]
+        last_xaction_fields = get(relevant, last_xaction)
+        penult_xaction = xaction_records[-2]
+        penult_xaction_fields = get(relevant, penult_xaction)
+        import_record_seq = iter(import_records)
+        previous = get(relevant, next(import_record_seq))
+        for (i, current) in enumerate(import_record_seq):
+            if (
+                get(relevant, current) == last_xaction_fields
+                and previous == penult_xaction_fields
+            ):
+                new_import_records = import_records[i+2:]
+                break
+            else:
+                previous = get(relevant, current)
+        else:
+            new_import_records = import_records[:]
+
+        new_import_grid = [
+            [record[field] for field in relevant]
+            for record in new_import_records
+        ]
+        start_row = last_row_index + 1
+        end_row = start_row + len(new_import_grid)
+        xaction_sheet.update(f"A{start_row}:G{end_row}", new_import_grid)
+
+    def import_inventory(self):
+        inv_import = self.sheets["inventoryimport"]
+        data = {
+            self.entity.from_name(x["Name"]).id: x.get("Amount") or 1
+            for x in inv_import.get_all_records()
+        }
+        self._inventory_map.record(data)
+
     def update(self):
         print("Updating recipes...")
         self.update_recipes()
@@ -669,6 +742,9 @@ class SheetInterface:
         print("Updating ingredient base prices...")
         self.update_ingredient_base()
         print("Updating ingredient market prices...")
+        # FIXME: Reset cache: somehow this is screwing me up even though the
+        # eviction policy is clear
+        self.order_fetcher._orders.clear()
         self.update_ingredient_prices()
         print("Updating product market prices...")
         self.update_product_prices()
