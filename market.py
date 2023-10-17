@@ -94,7 +94,9 @@ class OrderFetcher:
                 self._orders.set(key, list(seq), expire=expire)
 
         keys = [(entity.id, region.id) for region in regions]
-        return itertools.chain.from_iterable(self._orders[k] for k in keys)
+        return list(
+            itertools.chain.from_iterable(self._orders[k] for k in keys)
+        )
 
 
 class EveMarketMetrics:
