@@ -49,30 +49,6 @@ eve_trading_sheet = (
 )
 
 
-names_for_sale = [
-    "Small Signal Focusing Kit I",
-    "Small Polycarbon Engine Housing I",
-    "Small Hyperspatial Velocity Optimizer I",
-    "Medium Signal Focusing Kit I",
-    "Medium Polycarbon Engine Housing I",
-    "Medium Hyperspatial Velocity Optimizer I",
-    "Large Signal Focusing Kit I",
-    "Large Polycarbon Engine Housing I",
-    "Large Hyperspatial Velocity Optimizer I",
-    "Large Cap Battery I",
-    "Small Low Friction Nozzle Joints I",
-    "Small Auxiliary Thrusters I",
-    "Medium Low Friction Nozzle Joints I",
-    "Medium Auxiliary Thrusters I",
-    "Large Low Friction Nozzle Joints I",
-    "Large Auxiliary Thrusters I",
-    "Core Probe Launcher I",
-
-    # not profitable
-    #"Small Cargohold Optimization I",
-]
-merch = entity.from_name_seq(names_for_sale)
-
 industry = Industry(universe, blueprints)
 
 dodixie_fed = entity.from_name(
@@ -381,6 +357,8 @@ class SheetInterface:
                 "Market Transactions",
                 "Transaction Import",
                 "Inventory Import",
+                "Job History",
+                "Job Import",
             ]
             self._sheets = {
                 k.lower().replace(" ", ""): self.spreadsheet.worksheet(k)
@@ -722,6 +700,60 @@ class SheetInterface:
         end_row = start_row + len(new_import_grid)
         xaction_sheet.update(f"A{start_row}:G{end_row}", new_import_grid)
 
+    def import_jobs(self):
+        jh_sheet = self.sheets["jobhistory"]
+        import_sheet = self.sheets["jobimport"]
+        jh_records = [
+            record for record in
+            jh_sheet.get_all_records()
+            if record.get("Install date")
+        ]
+        import_records = sorted(
+            import_sheet.get_all_records(),
+            key=lambda x: x["Install date"],
+        )
+        # Plus 1 because the header is in the sheet but not counted in the
+        # record list
+        last_row_index = len(jh_records) + 1
+
+        # Find the last 2 records in the history in the import records
+        relevant = [
+            "Status",
+            "Runs",
+            "Activity",
+            "Blueprint Name",
+            "Jumps",
+            "Security",
+            "Facility",
+            "Install date",
+            "End date",
+        ]
+        last_jh = jh_records[-1]
+        last_jh_fields = get(relevant, last_jh)
+        penult_jh = jh_records[-2]
+        penult_jh_fields = get(relevant, penult_jh)
+        import_record_seq = iter(import_records)
+        previous = get(relevant, next(import_record_seq))
+        for (i, current) in enumerate(import_record_seq):
+            if (
+                get(relevant, current) == last_jh_fields
+                and previous == penult_jh_fields
+            ):
+                new_import_records = import_records[i+2:]
+                break
+            else:
+                previous = get(relevant, current)
+        else:
+            new_import_records = import_records[:]
+
+        new_import_grid = [
+            [record[field] for field in relevant]
+            for record in new_import_records
+        ]
+        start_row = last_row_index + 1
+        end_row = start_row + len(new_import_grid)
+        jh_sheet.update(f"A{start_row}:I{end_row}", new_import_grid)
+
     def import_inventory(self):
         inv_import = self.sheets["inventoryimport"]
         data = {
@@ -729,6 +761,100 @@ class SheetInterface:
             for x in inv_import.get_all_records()
         }
         self._inventory_map.record(data)
+
+    def update_stock_from_import(self, when=None):
+        inv = {int(k): v for (k, v) in self._inventory_map.value(when).items()}
+        self.apply_product_dict(inv, "ProductStock")
+        self.apply_ingredient_dict(inv, "IngredientStock")
+
+    def transactions_from_sheet(self):
+        return sorted(
+            self.sheets["markettransactions"].get_all_records(),
+            key=lambda x: x["Date"],
+        )
+
+    def manufacture_history_from_sheet(self):
+        manufacture_records = [
+            record for record in self.sheets["jobhistory"].get_all_records()
+            if (
+                record["Status"] == "Succeeded"
+                and record["Activity"] == "Manufacturing"
+            )
+        ]
+        return sorted(manufacture_records, key=lambda x: x["Install date"])
+
+    def update_sab(self):
+        sab1 = sab(self.stock_source_sink_from_sheets())
+        self.apply_ingredient_dict(
+            {k.id: v for (k, v) in sab1.items()},
+            "G3:G100",
+        )
+
+    def stock_source_sink_from_sheets(self):
+        xactions = self.transactions_from_sheet()
+        job_hist = self.manufacture_history_from_sheet()
+        jobs = sorted(
+            [
+                {
+                    **record,
+                    "Install date": record["start_date"].replace("T", " ")[:-4],
+                }
+                for record in self.ua.jobs()
+            ],
+            key=lambda x: x["Install date"],
+        )
+
+        interleaved = interleave_sorted(
+            xactions, job_hist, jobs,
+            keys=[
+                lambda xact: xact["Date"],
+                lambda jh: jh["Install date"],
+                lambda j: j["Install date"],
+            ],
+        )
+
+        for entry in interleaved:
+            # Market Transactions
+            if "Other Party" in entry:
+                item = self.entity.from_name(entry["Item"]).entity
+                is_buy = entry["Total Received"].startswith("-")
+                amount = int(entry["Amount"])
+                price = float(entry["Unit Price (str)"].replace(",", "")[:-4])
+
+                if is_buy:
+                    yield ("sab_update", item, amount, price)
+                    yield ("stock_source", item, amount)
+                else:
+                    yield ("stock_sink", item, amount)
+
+            # Historical job
+            elif "Status" in entry and entry["Status"] == "Succeeded":
+                end = len(" Blueprint")
+                item = self.entity.from_name(entry["Blueprint Name"][:-end]).entity
+                amount = int(entry["Runs"])
+                yield ("stock_source", item, amount)
+                inputs = amount * self.blueprints.ingredients(item)
+                for (_, amt, it) in inputs.triples():
+                    yield ("stock_sink", it, amt)
+
+            # Current job
+            elif "status" in entry:
+                if not (
+                    entry["activity_id"] == 1 and entry["status"] == "active"
+                ):
+                    continue
+                # Otherwise 
+                item = self.entity.from_id(entry["product_type_id"]).entity
+                amount = entry["runs"]
+                yield ("stock_source", item, amount)
+                inputs = amount * self.blueprints.ingredients(item)
+                for (_, amt, it) in inputs.triples():
+                    yield ("stock_sink", it, amt)
+
+            # ???
+            else:
+                print(f"Wtf is this: {entry}")
+
 
     def update(self):
         print("Updating recipes...")
@@ -749,107 +875,15 @@ class SheetInterface:
         print("Updating product market prices...")
         self.update_product_prices()
 
-
-def update_sheet(spreadsheet, ua, entity, industry, station):
-    meta_sheet = spreadsheet.worksheet("Meta")
-    product_sheet = spreadsheet.worksheet("Products")
-    ingredient_sheet = spreadsheet.worksheet("Ingredients")
-
-    meta_sheet.update("A1", [[station.name]])
-
-    product_ids = product_sheet.get_values("ProductIDs")
-    ingredient_ids = ingredient_sheet.get_values("IngredientIDs")
-
-    def map_product_ids_to_col(output_col, func):
-        return product_sheet.update(
-            output_col,
-            sh.threadmap_col_range(func, product_ids),
-        )
-
-    def map_ingredient_ids_to_col(output_col, func):
-        return ingredient_sheet.update(
-            output_col,
-            sh.threadmap_col_range(func, ingredient_ids),
-        )
-
-    # Update stock of products and ingredients
-    print("Reading inventory...")
-    tots = ua.aggregate_on_field(
-        "quantity",
-        (
-            asset for asset in ua.assets()
-            if asset["location_id"] == station.id
-        ),
-    )
-    print("Updating product stock...")
-    map_product_ids_to_col("ProductStock", lambda x: tots.get(int(x) if x else None, 0))
-    print("Updating ingredient stock...")
-    map_ingredient_ids_to_col("IngredientStock", lambda x: tots.get(int(x) if x else None, 0))
-
-    # Update order volume of products
-    print("Reading orders...")
-    orders = ua.orders()
-    order_volume = ua.aggregate_on_field("volume_remain", orders)
-    min_sell = {}
-    for x in orders:
-        type_id = x["type_id"]
-        min_sell[type_id] = (
-            min(min_sell[type_id], x["price"]) if type_id in min_sell
-            else x["price"]
-        )
-    print("Updating product order volume...")
-    map_product_ids_to_col("ProductOrderVolume", lambda x: order_volume.get(int(x) if x else None, 0))
-    print("Updating product sale prices...")
-    map_product_ids_to_col("MinOrderPrice", lambda x: min_sell.get(int(x) if x else None, 0))
-
-    # Update craft volume of products
-    print("Reading jobs...")
-    craft_volume = ua.aggregate_on_field(
-        "runs",
-        ua.jobs(),
-        type_field="product_type_id",
-    )
-    print("Updating product job volume...")
-    map_product_ids_to_col("ProductCraftVolume", lambda x: craft_volume.get(int(x) if x else None, 0))
-
-    # Update sell p10, station sell p10 products
-    print("Updating product relevant sell...")
-    map_product_ids_to_col(
-        "ProductSellP10",
-        lambda x: p1(relevant_sell(entity.from_id(x).entity)),
-    )
-    print("Updating product station sell...")
-    map_product_ids_to_col(
-        "ProductDodixieSellP10",
-        lambda x: p1(station_sell(station, entity.from_id(x).entity)),
-    )
-
-    # Update sell p20, station sell p20, station buy p90 ingredients
-    print("Updating ingredient station sell...")
-    map_ingredient_ids_to_col(
-        "IngredientDodixieSellP20",
-        lambda x: p20(station_sell(station, entity.from_id(x).entity)),
-    )
-    print("Updating ingredient station buy...")
-    map_ingredient_ids_to_col(
-        "IngredientDodixieBuyP90",
-        lambda x: p90(station_buy(station, entity.from_id(x).entity)),
-    )
-
-    print("Updating ingredient base costs...")
-    mp = industry.market_prices()
-    map_ingredient_ids_to_col(
-        "IngredientBaseCost",
-        lambda x: mp["adjusted"][int(x)],
-    )
-
-
-# def reprocess_flip(spreadsheet, ua, entity, station):
-#     order_calc = OrderCalc(
-#         broker_fee_percent=3,
-#         accounting_level=4,
-#     )
-#     return order_calc.sale_cost(sell_price)
+    def update_sheet_stuff(self):
+        print("Importing transactions...")
+        self.import_transactions()
+        print("Importing jobs...")
+        self.import_jobs()
+        print("Importing inventory...")
+        self.import_inventory()
+        print("Updating SAB...")
+        self.update_sab()
 
 
 def ore_variants(ore, *variants):
@@ -866,6 +900,54 @@ def ore_variants(ore, *variants):
 
 def print_ore_variants(ore, *variants):
     return print("\n".join(ore_variants(ore, *variants)))
+
+
+def interleave_sorted(*seqs, keys=lambda x: x):
+    _seqs = [iter(s) for s in seqs]
+    if not isinstance(keys, (tuple, list)):
+        keys = [keys]*len(_seqs)
+    
+    g = [next(s, None) for s in _seqs]
+
+    while any(gg is not None for gg in g):
+        x = [
+            (i, k(s), s) for (i, (s, k)) in enumerate(zip(g, keys))
+            if s is not None
+        ]
+        (pos, _, value) = min(x, key=lambda iks: iks[1])
+        yield value
+        g = [
+            next(s, None) if i == pos else gg
+            for (i, (gg, s)) in enumerate(zip(g, _seqs))
+        ]
+
+
+def sab(updates):
+    amounts = {}
+    sabs = {}
+
+    for record in updates:
+
+        match record:
+
+            case ("stock_source", item, amount):
+                amounts[item] = max(0, amounts.get(item, 0) + amount)
+
+            case ("stock_sink", item, amount):
+                amounts[item] = max(0, amounts.get(item, 0) - amount)
+
+            case ("sab_update", item, amount, price):
+                if sabs.get(item, 0) == 0:
+                    sabs[item] = price
+                else:
+                    current_amt = amounts.get(item, 0)
+                    sab = sabs[item]
+                    sabs[item] = (
+                        (current_amt * sab + amount * price)
+                        / (current_amt + amount)
+                    )
+
+    return sabs
 
 
 si = SheetInterface(spreadsheet, ua, entity, order_fetcher, industry, blueprints, dodixie_fed)

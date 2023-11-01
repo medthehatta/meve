@@ -21,34 +21,31 @@ def get_orders(requester, query, region_id, type_id=None, page=1):
     if type_id is not None:
         params["type_id"] = type_id
 
-    return _json(
-        requester.request("GET", f"/markets/{region_id}/orders", params=params)
-    )
+    return requester.request("GET", f"/markets/{region_id}/orders", params=params)
 
 
-def iter_orders(r, query, region_id, type_id=None):
+def iter_orders(requester, query, region_id, type_id=None):
     page = 1
     while True:
-        try:
-            yield from get_orders(
-                r,
-                query,
-                region_id=region_id,
-                type_id=type_id,
-                page=page,
-            )
-            page += 1
-        except HTTPError:
+        res = get_orders(requester, query, region_id, type_id=type_id, page=page)
+        if res.ok:
+            yield res.json()
+        elif res.status_code == 404:
             return
+        else:
+            yield []
+        page += 1
 
 
 def orders_for_item(requester, region_ids, item_id):
     return itertools.chain.from_iterable(
-        iter_orders(
-            requester,
-            {"order_type": "all"},
-            region_id,
-            int(item_id),
+        next(
+            iter_orders(
+                requester,
+                {"order_type": "all"},
+                region_id,
+                int(item_id),
+            )
         )
         for region_id in region_ids
     )

@@ -140,6 +140,26 @@ class BlueprintLookup:
             for x in materials
         ]
 
+    def _invention_triples(self, entity):
+        data = self.lookup(entity)
+
+        if "activityMaterials" not in data:
+            return []
+
+        if "8" in data["activityMaterials"]:
+            materials = data["activityMaterials"]["8"]
+        else:
+            return []
+
+        return [
+            (
+                x["name"],
+                x["quantity"],
+                self.entities.strict.from_id(x["typeid"]),
+            )
+            for x in materials
+        ]
+
     def ingredients(self, entity, recurse=None):
         if recurse is not None:
             recurse = recurse + [entity]
@@ -159,6 +179,9 @@ class BlueprintLookup:
             [(entity.name, 1, entity)],
         )
         return Ingredients.from_triples(triples)
+
+    def invention(self, entity):
+        return Ingredients.from_triples(self._invention_triples(entity))
 
 
 class Industry:
