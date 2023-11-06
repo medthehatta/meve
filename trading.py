@@ -868,9 +868,6 @@ class SheetInterface:
         print("Updating ingredient base prices...")
         self.update_ingredient_base()
         print("Updating ingredient market prices...")
-        # FIXME: Reset cache: somehow this is screwing me up even though the
-        # eviction policy is clear
-        self.order_fetcher._orders.clear()
         self.update_ingredient_prices()
         print("Updating product market prices...")
         self.update_product_prices()
