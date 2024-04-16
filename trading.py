@@ -466,6 +466,11 @@ class SheetInterface:
         self.apply_product_dict(tots, "ProductStock")
         self.apply_ingredient_dict(tots, "IngredientStock")
 
+    def update_stock_anywhere(self):
+        tots = self.ua.aggregate_on_field("quantity", self.ua.assets())
+        self.apply_product_dict(tots, "ProductStock")
+        self.apply_ingredient_dict(tots, "IngredientStock")
+
     def update_orders(self):
         orders = self.ua.orders()
         order_volume = self.ua.aggregate_on_field("volume_remain", orders)
@@ -629,7 +634,7 @@ class SheetInterface:
         ings = set([])
         rows = []
 
-        entities = self.entity.from_id_seq(self.product_ids)
+        entities = self.entity.from_id_seq(pid for pid in self.product_ids if pid)
 
         for outp in entities:
             ing_triples = blueprints.ingredients(outp).triples()
@@ -645,7 +650,13 @@ class SheetInterface:
         result.append(["Product", "ID"] + [x.id for x in all_ings])
         for row in rows:
             result.append([row["Product"], row["ID"]] + [row.get(x.id, 0) for x in all_ings])
-        self.sheets["recipes"].update(range_name="A2", values=result)
+        self.sheets["recipes"].update(range_name="A5", values=result)
+        # Need to upgrade the ingredient listing as well before we actually
+        # populate the ingredients sheet
+        self.sheets["ingredients"].update(
+            range_name="A3",
+            values=[[x.name, x.id] for x in all_ings],
+        )
 
     def import_transactions(self):
         xaction_sheet = self.sheets["markettransactions"]
@@ -860,7 +871,7 @@ class SheetInterface:
         print("Updating recipes...")
         self.update_recipes()
         print("Updating stock...")
-        self.update_stock()
+        self.update_stock_anywhere()
         print("Updating orders...")
         self.update_orders()
         print("Updating jobs...")
