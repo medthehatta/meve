@@ -795,7 +795,11 @@ class SheetInterface:
         return sorted(manufacture_records, key=lambda x: x["Install date"])
 
     def update_sab(self):
-        sab1 = sab(self.stock_source_sink_from_sheets())
+        sab1 = sab(
+            self.stock_source_sink_from_sheets(),
+            # TODO: Should we pull this from the sheet?
+            market_prices=self.industry.market_prices(),
+        )
         self.apply_ingredient_dict(
             {k.id: v for (k, v) in sab1.items()},
             "G3:G100",
@@ -833,20 +837,17 @@ class SheetInterface:
                 price = float(entry["Unit Price (str)"].replace(",", "")[:-4])
 
                 if is_buy:
-                    yield ("sab_update", item, amount, price)
-                    yield ("stock_source", item, amount)
+                    yield ("buy", item, amount, price)
                 else:
-                    yield ("stock_sink", item, amount)
+                    yield ("sell", item, amount, price)
 
             # Historical job
             elif "Status" in entry and entry["Status"] == "Succeeded":
                 end = len(" Blueprint")
                 item = self.entity.from_name(entry["Blueprint Name"][:-end]).entity
                 amount = int(entry["Runs"])
-                yield ("stock_source", item, amount)
-                inputs = amount * self.blueprints.ingredients(item)
-                for (_, amt, it) in inputs.triples():
-                    yield ("stock_sink", it, amt)
+                ingredients = amount * self.blueprints.ingredients(item)
+                yield ("craft", item, amount, ingredients)
 
             # Current job
             elif "status" in entry:
@@ -854,13 +855,11 @@ class SheetInterface:
                     entry["activity_id"] == 1 and entry["status"] == "active"
                 ):
                     continue
-                # Otherwise 
+                # Otherwise
                 item = self.entity.from_id(entry["product_type_id"]).entity
                 amount = entry["runs"]
-                yield ("stock_source", item, amount)
-                inputs = amount * self.blueprints.ingredients(item)
-                for (_, amt, it) in inputs.triples():
-                    yield ("stock_sink", it, amt)
+                ingredients = amount * self.blueprints.ingredients(item)
+                yield ("craft", item, amount, ingredients)
 
             # ???
             else:
@@ -930,7 +929,12 @@ def interleave_sorted(*seqs, keys=lambda x: x):
         ]
 
 
-def sab(updates):
+def sab(
+    updates,
+    market_prices: dict,
+    # TODO: Pull this from the sheet I guess?
+    install_factor=0.1,
+):
     amounts = {}
     sabs = {}
 
@@ -954,6 +958,52 @@ def sab(updates):
                         (current_amt * sab + amount * price)
                         / (current_amt + amount)
                     )
+
+            case ("buy", item, amount, price):
+                current_amt = amounts.get(item, 0)
+                sab = sabs.get(item, 0)
+                sabs[item] = (
+                    (current_amt * sab + amount * price)
+                    / (current_amt + amount)
+                )
+                amounts[item] = amounts.get(item, 0) + amount
+
+            case ("sell", item, amount, price):
+                current_amt = amounts.get(item, 0)
+                sab = sabs.get(item, 0)
+                sabs[item] = (
+                    (current_amt * sab + amount * price)
+                    / (current_amt + amount)
+                )
+                # We might have had some extra stock of the ingredient that we
+                # didn't gain from our transaction history.  Don't reduce the
+                # amount below zero!
+                amounts[item] = max(amounts.get(item, 0) - amount, 0)
+
+            # ingredients already factors in the amount of output produced,
+            # i.e. ingredients = amount * per_unit_ingredients
+            case ("craft", item, amount, ingredients):
+                mp = market_prices
+                install_cost = (
+                    install_factor * amount * mp["adjusted"][item.id]
+                )
+                ingredient_cost = sum(
+                    amt * mp["adjusted"][it.id]
+                    for (_, amt, it) in ingredients.triples()
+                )
+                cost = (install_cost + ingredient_cost) / amount
+                current_amt = amounts.get(item, 0)
+                sab = sabs.get(item, 0)
+                sabs[item] = (
+                    (current_amt * sab + amount * cost)
+                    / (current_amt + amount)
+                )
+                amounts[item] = amounts.get(item, 0) + amount
+                for (_, amt, it) in ingredients.triples():
+                    # We might have had some extra stock of the ingredient that
+                    # we didn't gain from our transaction history.  Don't
+                    # reduce the amount below zero!
+                    amounts[it] = max(amounts.get(it, 0) - amt, 0)
 
     return sabs
 
