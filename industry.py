@@ -140,26 +140,6 @@ class BlueprintLookup:
             for x in materials
         ]
 
-    def _invention_triples(self, entity):
-        data = self.lookup(entity)
-
-        if "activityMaterials" not in data:
-            return []
-
-        if "8" in data["activityMaterials"]:
-            materials = data["activityMaterials"]["8"]
-        else:
-            return []
-
-        return [
-            (
-                x["name"],
-                x["quantity"],
-                self.entities.strict.from_id(x["typeid"]),
-            )
-            for x in materials
-        ]
-
     def ingredients(self, entity, recurse=None):
         if recurse is not None:
             recurse = recurse + [entity]
@@ -181,7 +161,32 @@ class BlueprintLookup:
         return Ingredients.from_triples(triples)
 
     def invention(self, entity):
-        return Ingredients.from_triples(self._invention_triples(entity))
+        data = self.lookup(entity)
+        (science1, science2, encryption) = data["blueprintSkills"]["8"]
+        (dc1, dc2) = data["activityMaterials"]["8"]
+        dc1_e = self.entities.strict.from_id(dc1["typeid"])
+        dc1_m = dc1["quantity"]
+        dc2_e = self.entities.strict.from_id(dc2["typeid"])
+        dc2_m = dc2["quantity"]
+        prob = data["blueprintDetails"]["probability"] * 100
+        runs_per = data["blueprintDetails"]["maxProductionLimit"]
+
+        return {
+            # Assume science (and encryption) level required is just 1 all the
+            # time and proceed with the names
+            "science1": science1["name"],
+            "science2": science2["name"],
+            "encryption": encryption["name"],
+            # Just use the datacore ids; the name is just the science name with
+            # "Datacore - " in front of it
+            "datacore1": dc1_e.id,
+            "datacore2": dc2_e.id,
+            "datacore_mul1": dc1_m,
+            "datacore_mul2": dc2_m,
+            "base_success_pct": prob,
+            "runs_per": runs_per,
+        }
+
 
 
 class Industry:

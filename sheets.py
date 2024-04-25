@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import pickle
 import os.path
+from functools import reduce
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -122,3 +123,177 @@ def map_col_range(func, seq):
 def threadmap_col_range(func, seq, max_workers=4):
     with ThreadPoolExecutor(max_workers=max_workers) as exe:
         return list(exe.map(lambda x: [func(x[0])], seq))
+
+
+def records_to_columns(records):
+    if not records:
+        return {}
+
+    fields = list(records[0].keys())
+    result = {
+        field: [record.get(field) for record in records]
+        for field in fields
+    }
+
+    len_first = len(result[fields[0]])
+    if any(len(col) != len_first for col in result.values()):
+        raise ValueError(f"Ragged columns: {result}")
+
+    return result
+
+
+def columns_to_records(columns):
+    if not columns:
+        return []
+
+    header = list(columns.keys())
+    len_first = len(columns[header[0]])
+    if any(len(col) != len_first for col in columns.values()):
+        raise ValueError(f"Ragged columns: {columns}")
+
+    return [
+        dict(zip(header, record))
+        for record in zip(*[columns[field] for field in header])
+    ]
+
+
+def read_records(
+    sheet,
+    header_row=1,
+    numericize=True,
+    always_float=False,
+    skip_rendered_empty=True,
+    skip_when_field_empty=None,
+):
+    skip_when_field_empty = skip_when_field_empty or []
+
+    def _maybe_numeric(value):
+        if not numericize:
+            return value
+
+        cleaned = reduce(
+            lambda acc, x: acc.replace(x, ""),
+            ["$", ","],
+            value,
+        )
+
+        if "." in cleaned or always_float:
+            try:
+                return float(cleaned)
+            except (ValueError, TypeError):
+                return cleaned
+        else:
+            try:
+                return int(cleaned)
+            except (ValueError, TypeError):
+                return cleaned
+
+    # We are 0-indexed but the sheet is 1-indexed
+    header_row0 = header_row - 1
+
+    fields = sheet.get_values()[header_row0]
+    field_dupe_counts = {}
+    uniq_fields = []
+    for field in fields:
+        if field in field_dupe_counts:
+            field_dupe_counts[field] += 1
+            uniq_fields.append(f"{field}##{field_dupe_counts[field]}")
+        else:
+            uniq_fields.append(field)
+            field_dupe_counts[field] = 1
+    records = sheet.get_values()[header_row0 + 1:]
+    result = [
+        dict(zip(uniq_fields, [_maybe_numeric(value) for value in record]))
+        for record in records
+    ]
+
+    filtered = result[:]
+
+    if skip_rendered_empty:
+        filtered = [res for res in filtered if any(r != "" for r in res.values())]
+
+    if skip_when_field_empty:
+        filtered = [
+            res for res in filtered
+            if all(res.get(field) != "" for field in skip_when_field_empty)
+        ]
+
+    return filtered
+
+
+def insert_records(
+    sheet,
+    records,
+    header_row=1,
+    field_translation=None,
+):
+    field_translation = field_translation or {}
+    fields = sheet.get_values(f"A{header_row}:{header_row}")[0]
+    matrix = [
+        [
+            record.get(field_translation.get(field, field), "")
+            for field in fields
+        ]
+        for record in records
+    ]
+    sheet.update(
+        range_name=f"A{header_row+1}",
+        values=matrix,
+    )
+    return matrix
+
+
+def append_records(
+    sheet,
+    records,
+    header_row=1,
+    field_translation=None,
+):
+    field_translation = field_translation or {}
+    fields = sheet.get_values(f"A{header_row}:{header_row}")[0]
+    matrix = [
+        [
+            record.get(field_translation.get(field, field), "")
+            for field in fields
+        ]
+        for record in records
+    ]
+    last_row = len(sheet.get_values())
+    sheet.update(
+        range_name=f"A{last_row+1}",
+        values=matrix,
+    )
+    return matrix
+
+
+def populate_from_index(
+    in_sheet,
+    out_sheet=None,
+    index_col="A",
+    header_row=1,
+    top_left: str = None,
+    header_translate={},
+    data_for: callable = None,
+):
+    top_left = top_left or f"{index_col}{header_row}"
+
+    data_for = data_for or {}
+
+    index_values = in_sheet.get_values(f"{index_col}{header_row+1}:{index_col}")
+    rows = [
+        data_for(value[0]) for value in index_values
+    ]
+    header_values = in_sheet.get_values(f"{index_col}{header_row}:{header_row}")
+
+    matrix = (
+        header_values +
+        [
+            [
+                row.get(header_translate.get(hval, hval), None)
+                for hval in header_values[0]
+            ]
+            for row in rows
+        ]
+    )
+
+    sheet.update(f"{index_col}{header_row}", matrix)

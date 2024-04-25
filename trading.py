@@ -7,6 +7,7 @@ from pprint import pprint
 import pickle
 
 from cytoolz import get
+from cytoolz import unique
 
 from api_access import requester
 from api_access import authed_requester
@@ -69,30 +70,30 @@ yona_core = entity.from_name(
 
 order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=300)
 
-mfg_dodixie = MfgMarket(
-    Industry(universe, blueprints),
-    order_fetcher,
-    mfg_station=dodixie_fed,
-    accounting_level=3,
-)
-mfg_jita = MfgMarket(
-    Industry(universe, blueprints),
-    order_fetcher,
-    mfg_station=jita_44,
-    accounting_level=3,
-)
-mfg_stacmon = MfgMarket(
-    Industry(universe, blueprints),
-    order_fetcher,
-    mfg_station=stacmon_fed,
-    accounting_level=3,
-)
-mfg_yona = MfgMarket(
-    Industry(universe, blueprints),
-    order_fetcher,
-    mfg_station=stacmon_fed,
-    accounting_level=3,
-)
+# mfg_dodixie = MfgMarket(
+#     Industry(universe, blueprints),
+#     order_fetcher,
+#     mfg_station=dodixie_fed,
+#     accounting_level=3,
+# )
+# mfg_jita = MfgMarket(
+#     Industry(universe, blueprints),
+#     order_fetcher,
+#     mfg_station=jita_44,
+#     accounting_level=3,
+# )
+# mfg_stacmon = MfgMarket(
+#     Industry(universe, blueprints),
+#     order_fetcher,
+#     mfg_station=stacmon_fed,
+#     accounting_level=3,
+# )
+# mfg_yona = MfgMarket(
+#     Industry(universe, blueprints),
+#     order_fetcher,
+#     mfg_station=stacmon_fed,
+#     accounting_level=3,
+# )
 
 
 def minutes_ago(n):
@@ -250,7 +251,6 @@ def recipe_grid(blueprints, entities):
 spreadsheet = sheets_client.open_by_url(eve_trading_sheet)
 recipe_sheet = spreadsheet.worksheet("Recipes")
 product_sheet = spreadsheet.worksheet("Products")
-ingredient_sheet = spreadsheet.worksheet("Ingredients")
 
 
 REGIONS = entity.from_names(
@@ -352,7 +352,6 @@ class SheetInterface:
                 "Meta",
                 "Facility",
                 "Products",
-                "Ingredients",
                 "Recipes",
                 "Market Transactions",
                 "Transaction Import",
@@ -494,9 +493,10 @@ class SheetInterface:
         )
         self.apply_product_dict(craft_volume, "ProductCraftVolume")
 
-    def update_ingredient_base(self):
+    def update_base(self):
         mp = self.industry.market_prices()
         self.apply_ingredient_dict(mp["adjusted"], "IngredientBaseCost")
+        self.apply_product_dict(mp["adjusted"], "ProductBaseCost")
 
     def update_product_prices(self, max_workers=6):
 
@@ -531,15 +531,15 @@ class SheetInterface:
         )
 
         metrics = {
-            x: self._market_metrics_from_orders(by_id, x)
-            for x in ingredient_ids
+            ing_id: self._market_metrics_from_orders(by_id, ing_id)
+            for ing_id in ingredient_ids
         }
         result = {}
-        for x in metrics:
-            for col in metrics[x]:
+        for ing_id in metrics:
+            for col in metrics[ing_id]:
                 if col not in result:
                     result[col] = {}
-                result[col][x] = metrics[x][col]
+                result[col][ing_id] = metrics[ing_id][col]
 
         for k in result:
             self.apply_ingredient_dict(
@@ -563,37 +563,29 @@ class SheetInterface:
 
         return dict(zip(ids, entity_orders))
 
-    def _market_metrics_from_orders(self, by_id, x):
+    def _fetch_orders_by_name(self, names, max_workers=6):
+        with ThreadPoolExecutor(max_workers=max_workers) as exe:
+            entity_orders = list(
+                exe.map(
+                    lambda x: list(
+                        self.order_fetcher.get_for_regions(
+                            self.entity.strict.from_name(x),
+                            REGIONS,
+                        ),
+                    ),
+                    names,
+                )
+            )
+
+        return dict(zip(names, entity_orders))
+
+    def _market_metrics_from_orders(self, lookup, x):
         return {
-            "Dodixie Sell p1": p1(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        dodixie_fed,
-                        EveMarketMetrics.filter_sell(by_id[x]),
-                    ),
-                ),
-            ),
-            "Dodixie Sell p20": p20(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        dodixie_fed,
-                        EveMarketMetrics.filter_sell(by_id[x]),
-                    ),
-                ),
-            ),
-            "Dodixie Buy p90": p90(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        dodixie_fed,
-                        EveMarketMetrics.filter_buy(by_id[x]),
-                    ),
-                ),
-            ),
             "Jita Sell p1": p1(
                 EveMarketMetrics.as_series(
                     EveMarketMetrics.filter_location(
                         jita_44,
-                        EveMarketMetrics.filter_sell(by_id[x]),
+                        EveMarketMetrics.filter_sell(lookup[x]),
                     ),
                 ),
             ),
@@ -601,34 +593,47 @@ class SheetInterface:
                 EveMarketMetrics.as_series(
                     EveMarketMetrics.filter_location(
                         jita_44,
-                        EveMarketMetrics.filter_sell(by_id[x]),
+                        EveMarketMetrics.filter_sell(lookup[x]),
                     ),
                 ),
             ),
-            "Jita Buy p90": p90(
+            "Jita Buy Max": maximum(
                 EveMarketMetrics.as_series(
                     EveMarketMetrics.filter_location(
                         jita_44,
-                        EveMarketMetrics.filter_buy(by_id[x]),
+                        EveMarketMetrics.filter_buy(lookup[x]),
                     ),
                 ),
             ),
             "Zone Sell p1": p1(
                 EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_sell(by_id[x]),
+                    EveMarketMetrics.filter_sell(lookup[x]),
                 ),
             ),
             "Zone Sell p20": p20(
                 EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_sell(by_id[x]),
+                    EveMarketMetrics.filter_sell(lookup[x]),
                 ),
             ),
-            "Zone Buy p90": p90(
+            "Zone Buy Max": maximum(
                 EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_buy(by_id[x]),
+                    EveMarketMetrics.filter_buy(lookup[x]),
                 ),
             ),
         }
+
+    def update_product_ids_from_names(self):
+        names = sh.get_col_range(
+            self.sheets["products"].get_values("A3:A500")
+        )
+        ids = self.sheet_threadmap(
+            lambda n: entity.from_name(n).id,
+            names,
+        )
+        self.sheets["products"].update(
+            range_name="B3:B500",
+            values=ids,
+        )
 
     def update_recipes(self):
         ings = set([])
@@ -646,17 +651,10 @@ class SheetInterface:
 
         all_ings = list(ings)
         result = []
-        result.append(["", "Ingredient"] + [x.name for x in all_ings])
-        result.append(["Product", "ID"] + [x.id for x in all_ings])
+        result.append(["Product / Ingredient"] + [x.name for x in all_ings])
         for row in rows:
-            result.append([row["Product"], row["ID"]] + [row.get(x.id, 0) for x in all_ings])
+            result.append([row["Product"]] + [row.get(x.id, 0) for x in all_ings])
         self.sheets["recipes"].update(range_name="A5", values=result)
-        # Need to upgrade the ingredient listing as well before we actually
-        # populate the ingredients sheet
-        self.sheets["ingredients"].update(
-            range_name="A3",
-            values=[[x.name, x.id] for x in all_ings],
-        )
 
     def import_transactions(self):
         xaction_sheet = self.sheets["markettransactions"]
@@ -865,22 +863,109 @@ class SheetInterface:
             else:
                 print(f"Wtf is this: {entry}")
 
+    def _names_from_sheet(self, sheet_name, name_field, header_row):
+        return sh.records_to_columns(
+            sh.read_records(
+                self.spreadsheet.worksheet(sheet_name),
+                header_row=header_row,
+                skip_when_field_empty=[name_field],
+            )
+        )[name_field]
+
+    def update_invention(self):
+        print("Collecting tech 2 BPCs...")
+        bpc_names = self._names_from_sheet("Invention", "Item", 1)
+        invention_records = [
+            {
+                "Item": name,
+                **self.blueprints.invention(self.entity.from_name(name)),
+            }
+            for name in bpc_names
+        ]
+        sh.insert_records(
+            self.spreadsheet.worksheet("InventionImport"),
+            invention_records,
+            header_row=1,
+            field_translation={
+                "Science 1": "science1",
+                "Datacore Multiplier 1": "datacore_mul1",
+                "Science 2": "science2",
+                "Datacore Multiplier 2": "datacore_mul2",
+                "Encryption": "encryption",
+                "Base Success Pct": "base_success_pct",
+                "Runs Per Success": "runs_per",
+            },
+        )
+        print("Collecting sciences...")
+        sciences1 = self._names_from_sheet("Invention", "Science 1", 1)
+        sciences2 = self._names_from_sheet("Invention", "Science 2", 1)
+        encryption = self._names_from_sheet("Invention", "Encryption", 1)
+        skills = list(unique(itertools.chain(sciences1, sciences2, encryption)))
+        print("Fetching skills...")
+        skill_data = self.ua.requester.request(
+            "GET",
+            f"/characters/{ua.character_id}/skills"
+        ).json()
+        skill_to_level = {
+            entity.from_id(s["skill_id"]).name: s["active_skill_level"]
+            for s in skill_data["skills"]
+        }
+        sh.insert_records(
+            self.spreadsheet.worksheet("Science"),
+            [
+                {"Science": skill, "Skill": skill_to_level.get(skill, 0)}
+                for skill in skills
+            ],
+            header_row=1,
+        )
+
+    def update_prices(self):
+        print("Collecting prices to check...")
+        batch_names = self._names_from_sheet("Batches", "Item", 3)
+        product_names = self._names_from_sheet("Products", "Item", 2)
+        # Ingredients are taken from a row in the recipes sheet, so they're a
+        # little weird
+        ingredient_names = self.spreadsheet.worksheet("Recipes").get_values("B5:5")[0]
+        science_names = self._names_from_sheet("Science", "Science", 1)
+        datacore_names = [
+            f"Datacore - {sci}" for sci in science_names
+            if "Encryption Methods" not in sci
+        ]
+        names = list(
+            unique(
+                itertools.chain(
+                    batch_names,
+                    product_names,
+                    ingredient_names,
+                    datacore_names,
+                )
+            )
+        )
+        print(f"Found {len(names)} items to check.")
+        mp = self.industry.market_prices()
+        entities = self.entity.strict.from_name_seq(names)
+        orders = self._fetch_orders_by_name(names, max_workers=6)
+        metrics = [
+            {
+                "Item": entity.name,
+                **self._market_metrics_from_orders(orders, entity.name),
+                "Base Cost": mp["adjusted"][entity.id],
+            }
+            for entity in entities
+        ]
+        sh.insert_records(
+            self.spreadsheet.worksheet("Prices"),
+            metrics,
+            header_row=1,
+        )
 
     def update(self):
         print("Updating recipes...")
         self.update_recipes()
-        print("Updating stock...")
-        self.update_stock_anywhere()
-        print("Updating orders...")
-        self.update_orders()
-        print("Updating jobs...")
-        self.update_jobs()
-        print("Updating ingredient base prices...")
-        self.update_ingredient_base()
-        print("Updating ingredient market prices...")
-        self.update_ingredient_prices()
-        print("Updating product market prices...")
-        self.update_product_prices()
+        print("Updating invention...")
+        self.update_invention()
+        print("Updating prices...")
+        self.update_prices()
 
     def update_sheet_stuff(self):
         print("Importing transactions...")
@@ -1008,4 +1093,8 @@ def sab(
     return sabs
 
 
-si = SheetInterface(spreadsheet, ua, entity, order_fetcher, industry, blueprints, dodixie_fed)
+si = SheetInterface(spreadsheet, ua, entity, order_fetcher, industry, blueprints, jita_44)
+
+
+# if __name__ == "__main__":
+#     si.update()

@@ -21,6 +21,8 @@ tok = auth.EveOnlineFlow(
         "esi-markets.read_corporation_orders.v1",
         "esi-industry.read_character_jobs.v1",
         "esi-universe.read_structures.v1",
+        "esi-skills.read_skills.v1",
+        "esi-skills.read_skillqueue.v1",
     ],
     code_fetcher=auth.get_code_http(8080),
     disk_path="token.pkl",
