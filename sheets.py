@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import itertools
 import pickle
 import os.path
 from functools import reduce
@@ -221,6 +222,15 @@ def read_records(
     return filtered
 
 
+def a1_columns():
+    alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    a1_row = itertools.chain.from_iterable(
+        itertools.product(*[alpha]*n)
+        for n in itertools.count(1)
+    )
+    return ("".join(tup) for tup in a1_row)
+
+
 def insert_records(
     sheet,
     records,
@@ -229,6 +239,7 @@ def insert_records(
 ):
     field_translation = field_translation or {}
     fields = sheet.get_values(f"A{header_row}:{header_row}")[0]
+
     matrix = [
         [
             record.get(field_translation.get(field, field), "")
@@ -240,6 +251,7 @@ def insert_records(
         range_name=f"A{header_row+1}",
         values=matrix,
     )
+
     return matrix
 
 
@@ -264,36 +276,3 @@ def append_records(
         values=matrix,
     )
     return matrix
-
-
-def populate_from_index(
-    in_sheet,
-    out_sheet=None,
-    index_col="A",
-    header_row=1,
-    top_left: str = None,
-    header_translate={},
-    data_for: callable = None,
-):
-    top_left = top_left or f"{index_col}{header_row}"
-
-    data_for = data_for or {}
-
-    index_values = in_sheet.get_values(f"{index_col}{header_row+1}:{index_col}")
-    rows = [
-        data_for(value[0]) for value in index_values
-    ]
-    header_values = in_sheet.get_values(f"{index_col}{header_row}:{header_row}")
-
-    matrix = (
-        header_values +
-        [
-            [
-                row.get(header_translate.get(hval, hval), None)
-                for hval in header_values[0]
-            ]
-            for row in rows
-        ]
-    )
-
-    sheet.update(f"{index_col}{header_row}", matrix)

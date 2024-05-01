@@ -639,7 +639,8 @@ class SheetInterface:
         ings = set([])
         rows = []
 
-        entities = self.entity.from_id_seq(pid for pid in self.product_ids if pid)
+        product_names = self._names_from_sheet("Products", "Item", 2)
+        entities = self.entity.from_name_seq(product_names)
 
         for outp in entities:
             ing_triples = blueprints.ingredients(outp).triples()
@@ -874,7 +875,10 @@ class SheetInterface:
 
     def update_invention(self):
         print("Collecting tech 2 BPCs...")
-        bpc_names = self._names_from_sheet("Invention", "Item", 1)
+        product_names = self._names_from_sheet("Products", "Item", 2)
+        bpc_names = [
+            name for name in product_names if name.strip().endswith("II")
+        ]
         invention_records = [
             {
                 "Item": name,
@@ -897,26 +901,14 @@ class SheetInterface:
             },
         )
         print("Collecting sciences...")
-        sciences1 = self._names_from_sheet("Invention", "Science 1", 1)
-        sciences2 = self._names_from_sheet("Invention", "Science 2", 1)
-        encryption = self._names_from_sheet("Invention", "Encryption", 1)
+        sciences1 = self._names_from_sheet("InventionImport", "Science 1", 1)
+        sciences2 = self._names_from_sheet("InventionImport", "Science 2", 1)
+        encryption = self._names_from_sheet("InventionImport", "Encryption", 1)
         skills = list(unique(itertools.chain(sciences1, sciences2, encryption)))
-        print("Fetching skills...")
-        skill_data = self.ua.requester.request(
-            "GET",
-            f"/characters/{ua.character_id}/skills"
-        ).json()
-        skill_to_level = {
-            entity.from_id(s["skill_id"]).name: s["active_skill_level"]
-            for s in skill_data["skills"]
-        }
-        sh.insert_records(
-            self.spreadsheet.worksheet("Science"),
-            [
-                {"Science": skill, "Skill": skill_to_level.get(skill, 0)}
-                for skill in skills
-            ],
-            header_row=1,
+        print("Updating skill list (skill level update still manual)...")
+        self.spreadsheet.worksheet("Science").update(
+            range_name="A2:A",
+            values=[[skill] for skill in skills],
         )
 
     def update_prices(self):
@@ -1094,7 +1086,3 @@ def sab(
 
 
 si = SheetInterface(spreadsheet, ua, entity, order_fetcher, industry, blueprints, jita_44)
-
-
-# if __name__ == "__main__":
-#     si.update()
