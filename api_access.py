@@ -5,7 +5,7 @@ from authentication import EmptyToken
 import authentication as auth
 
 
-client_id = "2ca75dd163354b0794cca4726d631df4"
+client_id = "05b94fc680cc4eccb2b500d1db696077"
 with open("eve_client_secret", "r") as f:
     client_secret = f.read()
 
