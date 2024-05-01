@@ -1,10 +1,13 @@
+import os
+
 from hxxp import Requester
 from authentication import EmptyToken
 import authentication as auth
 
 
 client_id = "2ca75dd163354b0794cca4726d631df4"
-client_secret = "eHwPGFnA99aGu784pJBqv3U7mi9t6IfaNbkUmoKN"
+with open("eve_client_secret", "r") as f:
+    client_secret = f.read()
 
 tok = auth.EveOnlineFlow(
     "https://login.eveonline.com/v2/oauth/token",
