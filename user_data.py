@@ -155,3 +155,21 @@ class UserAssets:
             type_id = datum[type_field]
             results[type_id] = agg(results.get(type_id, 0), datum[field])
         return results
+
+    def current_structure(self):
+        loc = _json(
+            self.requester.request(
+                "GET",
+                f"/characters/{self.character_id}/location",
+            )
+        )
+        if "structure_id" in loc:
+            struct_data = _json(
+                self.requester.request(
+                    "GET",
+                    f"/universe/structures/{loc['structure_id']}",
+                )
+            )
+            return {"id": loc["structure_id"], **struct_data}
+        else:
+            return {}

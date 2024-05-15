@@ -7,9 +7,42 @@ from weighted_series import WeightedSeries
 from requests import HTTPError
 
 from hxxp import DefaultHandlers
+from hxxp import Requester
+from authentication import EveOnlineFlow
 
 
 _json = DefaultHandlers.raise_or_return_json
+
+
+def get_structure_orders(requester, structure_id, page=1):
+    return requester.request("GET", f"/markets/structures/{structure_id}", params={"page": page})
+
+
+def iter_structure_orders(requester, structure_id):
+    page = 1
+    while True:
+        res = get_structure_orders(requester, structure_id, page=page)
+        if res.ok:
+            yield from res.json()
+        elif res.status_code == 404 or res.status_code == 500:
+            return
+        else:
+            yield []
+        page += 1
+
+
+def orders_for_item(requester, region_ids, item_id):
+    return itertools.chain.from_iterable(
+        next(
+            iter_orders(
+                requester,
+                {"order_type": "all"},
+                region_id,
+                int(item_id),
+            )
+        )
+        for region_id in region_ids
+    )
 
 
 def get_orders(requester, query, region_id, type_id=None, page=1):
@@ -37,36 +70,61 @@ def iter_orders(requester, query, region_id, type_id=None):
         page += 1
 
 
-def orders_for_item(requester, region_ids, item_id):
-    return itertools.chain.from_iterable(
-        next(
-            iter_orders(
-                requester,
-                {"order_type": "all"},
-                region_id,
-                int(item_id),
-            )
-        )
-        for region_id in region_ids
-    )
-
-
 class OrderFetcher:
 
     def __init__(
         self,
         universe,
+        requester,
+        authed_requester=None,
         expire=60,
         disk_cache=None,
     ):
         self.universe = universe
-        # FIXME: Ugh, but we can fix the DI later
-        self.requester = self.universe.requester
+        self.requester = requester
+        self._authed_requester = authed_requester
         self.default_expire = expire
         if disk_cache:
             self._orders = diskcache.Cache(disk_cache)
         else:
             self._orders = diskcache.Cache()
+
+    @property
+    def authed_requester(self):
+        if not isinstance(self._authed_requester, Requester):
+            raise ValueError(
+                "No authed requester present.  "
+                "Re-instantiate with a valid authed requester"
+            )
+        if not isinstance(self._authed_requester.token, EveOnlineFlow):
+            raise ValueError(
+                "Authed requester is not configured with a valid token.  "
+                "Re-instantiate with a valid authed requester"
+            )
+        return self._authed_requester
+
+    def get_for_structure(self, entity, structure, expire=None):
+        expire = expire or self.default_expire
+        key = (entity.id, structure.id)
+
+        struct_key = ("struct", structure.id)
+        if struct_key not in self._orders:
+            orders = iter_structure_orders(
+                self.authed_requester,
+                structure.id,
+            )
+            orders_by_key = {}
+            for order in orders:
+                key = (order["type_id"], structure.id)
+                if key not in orders_by_key:
+                    orders_by_key[key] = []
+                else:
+                    orders_by_key[key].append(order)
+            for (key, orders_for_key) in orders_by_key.items():
+                self._orders.set(key, orders_for_key, expire=expire)
+            self._orders.set(struct_key, True, expire=expire)
+
+        return self._orders.get(key, [])
 
     def get_for_station(self, entity, station, expire=None):
         expire = expire or self.default_expire
@@ -79,7 +137,7 @@ class OrderFetcher:
             seq = orders_for_item(self.requester, [region.id], entity.id)
             self._orders.set(key, list(seq), expire=expire)
 
-        return self._orders[key]
+        return self._orders.get(key, [])
 
     def get_for_regions(self, entity, regions, expire=None):
         expire = expire or self.default_expire

@@ -25,11 +25,14 @@ from market import EveMarketMetrics
 import sheets as sh
 from sheets import service_login
 
+from structure_scraper import StructureScraper
+
 from tracked_map import TrackedMap
 
 from universe import UniverseLookup
 from universe import ItemFactory
 from universe import EntityFactory
+from universe import Entity
 
 from weighted_series import WeightedSeriesMetrics
 
@@ -42,6 +45,8 @@ items = ItemFactory(r0, "types.json")
 entity = EntityFactory(items, universe)
 blueprints = BlueprintLookup(items, entity)
 ua = UserAssets(r, "Mola Pavonis")
+
+structs = StructureScraper(entity, ua)
 
 sheets_client = service_login("service-account.json")
 eve_trading_sheet = (
@@ -68,7 +73,26 @@ yona_core = entity.from_name(
     "Yona II - Core Complexion Inc. Factory",
 )
 
-order_fetcher = OrderFetcher(universe, disk_cache="orders1", expire=300)
+k7 = {
+    "entity": Entity(1043661023026, "K7D-II - Mothership Bellicose"),
+    "type": entity.strict.from_name("Keepstar"),
+    "system": entity.strict.from_name("K7D-II"),
+}
+
+drac = {
+    "entity": Entity(1034323745897, "P-ZMZV - Dracarys Prime"),
+    "type": entity.strict.from_name("Keepstar"),
+    "system": entity.strict.from_name("P-ZMZV"),
+}
+
+
+order_fetcher = OrderFetcher(
+    universe,
+    requester,
+    authed_requester=authed_requester,
+    disk_cache="orders1",
+    expire=300,
+)
 
 # mfg_dodixie = MfgMarket(
 #     Industry(universe, blueprints),
@@ -321,6 +345,7 @@ class SheetInterface:
         industry,
         blueprints,
         station,
+        structures=None,
     ):
         self.spreadsheet = spreadsheet
         self.ua = ua
@@ -344,6 +369,7 @@ class SheetInterface:
             decoder=int,
             missing_is_change=True,
         )
+        self.structures = structures or []
 
     @property
     def sheets(self):
@@ -577,49 +603,179 @@ class SheetInterface:
                 )
             )
 
-        return dict(zip(names, entity_orders))
+        entity_orders_from_structures = [
+            list(
+                itertools.chain.from_iterable(
+                    self.order_fetcher.get_for_structure(
+                        self.entity.strict.from_name(name),
+                        struct,
+                    )
+                    for struct in self.structures
+                )
+            )
+            for name in names
+        ]
+
+        zone_by_name = dict(zip(names, entity_orders))
+        struct_by_name = dict(zip(names, entity_orders_from_structures))
+
+        all_orders = {
+            name: zone_by_name.get(name, []) + struct_by_name.get(name, [])
+            for name in names
+        }
+
+        return all_orders
 
     def _market_metrics_from_orders(self, lookup, x):
-        return {
-            "Jita Sell p1": p1(
+
+        try:
+            jita_sell_p1 = p1(
                 EveMarketMetrics.as_series(
                     EveMarketMetrics.filter_location(
                         jita_44,
                         EveMarketMetrics.filter_sell(lookup[x]),
                     ),
                 ),
-            ),
-            "Jita Sell p20": p20(
+            )
+        except ValueError:
+            jita_sell_p1 = None
+
+        try:
+            jita_sell_p20 = p20(
                 EveMarketMetrics.as_series(
                     EveMarketMetrics.filter_location(
                         jita_44,
                         EveMarketMetrics.filter_sell(lookup[x]),
                     ),
                 ),
-            ),
-            "Jita Buy Max": maximum(
+            )
+        except ValueError:
+            jita_sell_p20 = None
+
+        try:
+            jita_buy_max = maximum(
                 EveMarketMetrics.as_series(
                     EveMarketMetrics.filter_location(
                         jita_44,
                         EveMarketMetrics.filter_buy(lookup[x]),
                     ),
                 ),
-            ),
-            "Zone Sell p1": p1(
+            )
+        except ValueError:
+            jita_buy_max = None
+
+        try:
+            zone_sell_p1 = p1(
                 EveMarketMetrics.as_series(
                     EveMarketMetrics.filter_sell(lookup[x]),
                 ),
-            ),
-            "Zone Sell p20": p20(
+            )
+        except ValueError:
+            zone_sell_p1 = None
+
+        try:
+            zone_sell_p20 = p20(
                 EveMarketMetrics.as_series(
                     EveMarketMetrics.filter_sell(lookup[x]),
                 ),
-            ),
-            "Zone Buy Max": maximum(
+            )
+        except ValueError:
+            zone_sell_p20 = None
+
+        try:
+            zone_buy_max = maximum(
                 EveMarketMetrics.as_series(
                     EveMarketMetrics.filter_buy(lookup[x]),
                 ),
-            ),
+            )
+        except ValueError:
+            zone_buy_max = None
+
+        try:
+            k7_sell_p1 = p1(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        k7["entity"],
+                        EveMarketMetrics.filter_sell(lookup[x]),
+                    ),
+                ),
+            )
+        except ValueError:
+            k7_sell_p1 = None
+
+        try:
+            k7_sell_p20 = p20(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        k7["entity"],
+                        EveMarketMetrics.filter_sell(lookup[x]),
+                    ),
+                ),
+            )
+        except ValueError:
+            k7_sell_p20 = None
+
+        try:
+            k7_buy_max = maximum(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        k7["entity"],
+                        EveMarketMetrics.filter_buy(lookup[x]),
+                    ),
+                ),
+            )
+        except ValueError:
+            k7_buy_max = None
+
+        try:
+            drac_sell_p1 = p1(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        drac["entity"],
+                        EveMarketMetrics.filter_sell(lookup[x]),
+                    ),
+                ),
+            )
+        except ValueError:
+            drac_sell_p1 = None
+
+        try:
+            drac_sell_p20 = p20(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        drac["entity"],
+                        EveMarketMetrics.filter_sell(lookup[x]),
+                    ),
+                ),
+            )
+        except ValueError:
+            drac_sell_p20 = None
+
+        try:
+            drac_buy_max = maximum(
+                EveMarketMetrics.as_series(
+                    EveMarketMetrics.filter_location(
+                        drac["entity"],
+                        EveMarketMetrics.filter_buy(lookup[x]),
+                    ),
+                ),
+            )
+        except ValueError:
+            drac_buy_max = None
+
+        return {
+            "Jita Sell p1": jita_sell_p1,
+            "Jita Sell p20": jita_sell_p20,
+            "Jita Buy Max": jita_buy_max,
+            "Zone Sell p1": zone_sell_p1,
+            "Zone Sell p20": zone_sell_p20,
+            "Zone Buy Max": zone_buy_max,
+            "K7 Sell p1": k7_sell_p1,
+            "K7 Sell p20": k7_sell_p20,
+            "K7 Buy Max": k7_buy_max,
+            "Drac Sell p1": drac_sell_p1,
+            "Drac Sell p20": drac_sell_p20,
+            "Drac Buy Max": drac_buy_max,
         }
 
     def update_product_ids_from_names(self):
@@ -1085,4 +1241,13 @@ def sab(
     return sabs
 
 
-si = SheetInterface(spreadsheet, ua, entity, order_fetcher, industry, blueprints, jita_44)
+si = SheetInterface(
+    spreadsheet,
+    ua,
+    entity,
+    order_fetcher,
+    industry,
+    blueprints,
+    station=jita_44,
+    structures=[k7["entity"], drac["entity"]],
+)
