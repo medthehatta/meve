@@ -811,7 +811,7 @@ class SheetInterface:
         result.append(["Product / Ingredient"] + [x.name for x in all_ings])
         for row in rows:
             result.append([row["Product"]] + [row.get(x.id, 0) for x in all_ings])
-        self.sheets["recipes"].update(range_name="A5", values=result)
+        self.sheets["recipes"].update(range_name="A8", values=result)
 
     def import_transactions(self):
         xaction_sheet = self.sheets["markettransactions"]
@@ -1073,7 +1073,7 @@ class SheetInterface:
         product_names = self._names_from_sheet("Products", "Item", 2)
         # Ingredients are taken from a row in the recipes sheet, so they're a
         # little weird
-        ingredient_names = self.spreadsheet.worksheet("Recipes").get_values("B5:5")[0]
+        ingredient_names = self.spreadsheet.worksheet("Recipes").get_values("B8:8")[0]
         science_names = self._names_from_sheet("Science", "Science", 1)
         datacore_names = [
             f"Datacore - {sci}" for sci in science_names
@@ -1108,6 +1108,7 @@ class SheetInterface:
         )
 
     def update(self):
+        self.order_fetcher.authed_requester.token.get()
         print("Updating recipes...")
         self.update_recipes()
         print("Updating invention...")

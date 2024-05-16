@@ -9,3 +9,5 @@ eve_name_id_iso_cache
 graph.pkl
 
 *.sw[lmnop]
+
+eve_client_secret
