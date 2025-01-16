@@ -73,17 +73,17 @@ yona_core = entity.from_name(
     "Yona II - Core Complexion Inc. Factory",
 )
 
-k7 = {
-    "entity": Entity(1043661023026, "K7D-II - Mothership Bellicose"),
-    "type": entity.strict.from_name("Keepstar"),
-    "system": entity.strict.from_name("K7D-II"),
-}
-
-drac = {
-    "entity": Entity(1034323745897, "P-ZMZV - Dracarys Prime"),
-    "type": entity.strict.from_name("Keepstar"),
-    "system": entity.strict.from_name("P-ZMZV"),
-}
+# k7 = {
+#     "entity": Entity(1043661023026, "K7D-II - Mothership Bellicose"),
+#     "type": entity.strict.from_name("Keepstar"),
+#     "system": entity.strict.from_name("K7D-II"),
+# }
+# 
+# drac = {
+#     "entity": Entity(1034323745897, "P-ZMZV - Dracarys Prime"),
+#     "type": entity.strict.from_name("Keepstar"),
+#     "system": entity.strict.from_name("P-ZMZV"),
+# }
 
 
 order_fetcher = OrderFetcher(
@@ -691,77 +691,77 @@ class SheetInterface:
         except ValueError:
             zone_buy_max = None
 
-        try:
-            k7_sell_p1 = p1(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        k7["entity"],
-                        EveMarketMetrics.filter_sell(lookup[x]),
-                    ),
-                ),
-            )
-        except ValueError:
-            k7_sell_p1 = None
+        # try:
+        #     k7_sell_p1 = p1(
+        #         EveMarketMetrics.as_series(
+        #             EveMarketMetrics.filter_location(
+        #                 k7["entity"],
+        #                 EveMarketMetrics.filter_sell(lookup[x]),
+        #             ),
+        #         ),
+        #     )
+        # except ValueError:
+        #     k7_sell_p1 = None
 
-        try:
-            k7_sell_p20 = p20(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        k7["entity"],
-                        EveMarketMetrics.filter_sell(lookup[x]),
-                    ),
-                ),
-            )
-        except ValueError:
-            k7_sell_p20 = None
+        # try:
+        #     k7_sell_p20 = p20(
+        #         EveMarketMetrics.as_series(
+        #             EveMarketMetrics.filter_location(
+        #                 k7["entity"],
+        #                 EveMarketMetrics.filter_sell(lookup[x]),
+        #             ),
+        #         ),
+        #     )
+        # except ValueError:
+        #     k7_sell_p20 = None
 
-        try:
-            k7_buy_max = maximum(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        k7["entity"],
-                        EveMarketMetrics.filter_buy(lookup[x]),
-                    ),
-                ),
-            )
-        except ValueError:
-            k7_buy_max = None
+        # try:
+        #     k7_buy_max = maximum(
+        #         EveMarketMetrics.as_series(
+        #             EveMarketMetrics.filter_location(
+        #                 k7["entity"],
+        #                 EveMarketMetrics.filter_buy(lookup[x]),
+        #             ),
+        #         ),
+        #     )
+        # except ValueError:
+        #     k7_buy_max = None
 
-        try:
-            drac_sell_p1 = p1(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        drac["entity"],
-                        EveMarketMetrics.filter_sell(lookup[x]),
-                    ),
-                ),
-            )
-        except ValueError:
-            drac_sell_p1 = None
+        # try:
+        #     drac_sell_p1 = p1(
+        #         EveMarketMetrics.as_series(
+        #             EveMarketMetrics.filter_location(
+        #                 drac["entity"],
+        #                 EveMarketMetrics.filter_sell(lookup[x]),
+        #             ),
+        #         ),
+        #     )
+        # except ValueError:
+        #     drac_sell_p1 = None
 
-        try:
-            drac_sell_p20 = p20(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        drac["entity"],
-                        EveMarketMetrics.filter_sell(lookup[x]),
-                    ),
-                ),
-            )
-        except ValueError:
-            drac_sell_p20 = None
+        # try:
+        #     drac_sell_p20 = p20(
+        #         EveMarketMetrics.as_series(
+        #             EveMarketMetrics.filter_location(
+        #                 drac["entity"],
+        #                 EveMarketMetrics.filter_sell(lookup[x]),
+        #             ),
+        #         ),
+        #     )
+        # except ValueError:
+        #     drac_sell_p20 = None
 
-        try:
-            drac_buy_max = maximum(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        drac["entity"],
-                        EveMarketMetrics.filter_buy(lookup[x]),
-                    ),
-                ),
-            )
-        except ValueError:
-            drac_buy_max = None
+        # try:
+        #     drac_buy_max = maximum(
+        #         EveMarketMetrics.as_series(
+        #             EveMarketMetrics.filter_location(
+        #                 drac["entity"],
+        #                 EveMarketMetrics.filter_buy(lookup[x]),
+        #             ),
+        #         ),
+        #     )
+        # except ValueError:
+        #     drac_buy_max = None
 
         return {
             "Jita Sell p1": jita_sell_p1,
@@ -770,12 +770,12 @@ class SheetInterface:
             "Zone Sell p1": zone_sell_p1,
             "Zone Sell p20": zone_sell_p20,
             "Zone Buy Max": zone_buy_max,
-            "K7 Sell p1": k7_sell_p1,
-            "K7 Sell p20": k7_sell_p20,
-            "K7 Buy Max": k7_buy_max,
-            "Drac Sell p1": drac_sell_p1,
-            "Drac Sell p20": drac_sell_p20,
-            "Drac Buy Max": drac_buy_max,
+            # "K7 Sell p1": k7_sell_p1,
+            # "K7 Sell p20": k7_sell_p20,
+            # "K7 Buy Max": k7_buy_max,
+            # "Drac Sell p1": drac_sell_p1,
+            # "Drac Sell p20": drac_sell_p20,
+            # "Drac Buy Max": drac_buy_max,
         }
 
     def update_product_ids_from_names(self):
@@ -1250,5 +1250,5 @@ si = SheetInterface(
     industry,
     blueprints,
     station=jita_44,
-    structures=[k7["entity"], drac["entity"]],
+    structures=[],
 )

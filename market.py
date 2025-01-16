@@ -27,6 +27,7 @@ def iter_structure_orders(requester, structure_id):
         elif res.status_code == 404 or res.status_code == 500:
             return
         else:
+            print(res.__dict__)
             yield []
         page += 1
 
@@ -115,6 +116,7 @@ class OrderFetcher:
             )
             orders_by_key = {}
             for order in orders:
+                print(order)
                 key = (order["type_id"], structure.id)
                 if key not in orders_by_key:
                     orders_by_key[key] = []
