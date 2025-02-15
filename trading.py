@@ -1098,6 +1098,7 @@ class SheetInterface:
                 "Item": entity.name,
                 **self._market_metrics_from_orders(orders, entity.name),
                 "Base Cost": mp["adjusted"][entity.id],
+                "ItemID": entity.id,
             }
             for entity in entities
         ]
@@ -1108,7 +1109,7 @@ class SheetInterface:
         )
 
     def update(self):
-        self.order_fetcher.authed_requester.token.get()
+        #self.order_fetcher.authed_requester.token.get()
         print("Updating recipes...")
         self.update_recipes()
         print("Updating invention...")
@@ -1125,6 +1126,52 @@ class SheetInterface:
         self.import_inventory()
         print("Updating SAB...")
         self.update_sab()
+
+    def update_pi_prices(self):
+        print("Collecting pi prices to check...")
+        names1 = list(
+            set(
+                itertools.chain(
+                    self.spreadsheet.worksheet("PI Recipes").get_values("G1:1")[0],
+                    self._names_from_sheet("PI Recipes", "Name", 1)
+                )
+            )
+        )
+        names = [x for x in names1 if x]
+        print(f"Found {len(names)} items to check.")
+        entities = self.entity.strict.from_name_seq(names)
+        orders = self._fetch_orders_by_name(names, max_workers=6)
+        cost_mapping = {
+            1: 400,
+            2: 7200,
+            3: 60000,
+            4: 1200000,
+        }
+        metrics = [
+            {
+                "Item": entity.name,
+                **self._market_metrics_from_orders(orders, entity.name),
+                "Base Cost": cost_mapping.get(pi_tier(entity)),
+            }
+            for entity in entities
+        ]
+        sh.insert_records(
+            self.spreadsheet.worksheet("PI Prices"),
+            metrics,
+            header_row=1,
+        )
+
+
+def pi_tier(entity):
+    deets = universe.details("types", entity)
+    mapping = {
+        1334: 1,
+        1335: 2,
+        1336: 3,
+        1337: 4,
+    }
+
+    return mapping.get(deets.get("market_group_id"))
 
 
 def ore_variants(ore, *variants):
