@@ -1,3 +1,4 @@
+from collections import Counter
 import json
 from math import sqrt
 from pprint import pprint
@@ -246,11 +247,22 @@ def skills_from_fit(fit):
     return skills_from_components(entity_names=all_entities)
 
 
-def skills_from_fits_xml(xml_contents):
+def skills_from_fits_xml(xml_contents, cache_name=None):
+    if cache_name:
+        cache = diskcache.Cache(cache_name)
+    else:
+        cache = {}
+
     fits = components_from_fits_xml(xml_contents)
 
     for fit in fits:
-        skills = skills_from_fit(fit)
+
+        if ("name", fit["name"]) not in cache:
+            skills = skills_from_fit(fit)
+            cache[("name", fit["name"])] = skills
+
+        skills = cache.get(("name", fit["name"]))
+
         yield {
             "fit": fit["name"],
             "skills": skills,
@@ -263,10 +275,12 @@ def _trace(msg):
 
 def json_dump_skills_from_fits_xml(
     xml_contents,
+    cache_name="doctrine_fits",
     sleep_interval=10,
     sleep_seconds=10,
+    suppress_known=True,
 ):
-    cache = diskcache.Cache("doctrine_fits")
+    cache = diskcache.Cache(cache_name)
 
     fits = components_from_fits_xml(xml_contents)
 
@@ -277,8 +291,9 @@ def json_dump_skills_from_fits_xml(
     for (n, fit) in enumerate(fits, start=1):
         if ("name", fit["name"]) in cache:
             skills = cache.get(("name", fit["name"]))
-            print(json.dumps({"fit": fit["name"], "skills": skills}), flush=True)
-            _trace(f"KNOWN ({n}/{num_fits}) {fit['name']}")
+            if not suppress_known:
+                print(json.dumps({"fit": fit["name"], "skills": skills}), flush=True)
+                _trace(f"KNOWN ({n}/{num_fits}) {fit['name']}")
             continue
 
         try:
@@ -325,6 +340,130 @@ def compare_fits_from_cache(authed_requester, character_name, cache_name):
     return result
 
 
+def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--skills",
+        action="store_true",
+        help="Print skills required for the provided fits XML",
+    )
+    parser.add_argument(
+        "--missing",
+        action="store_true",
+        help=(
+            "Print skills required for using the fits in the XML which are "
+            "missing from the given character"
+        ),
+    )
+    parser.add_argument(
+        "--histogram",
+        action="store_true",
+        help=(
+            "Print the skills required by fits in the XML, sorted by "
+            "frequency of occurrence"
+        ),
+    )
+    parser.add_argument(
+        "--missing-histogram",
+        action="store_true",
+        help=(
+            "Print skills required for using the fits in the XML which are "
+            "missing from the given character sorted by frequency of "
+            "occurrence"
+        ),
+    )
+    parser.add_argument("--purge", action="store_true")
+    parser.add_argument("-c", "--character-name", "--character")
+    parser.add_argument("-C", "--cache-name", "--cache", default="doctrine_fits")
+    parser.add_argument("-i", "--sleep-interval", "--interval", type=int)
+    parser.add_argument("-d", "--sleep-duration", "--duration", type=int)
+    parser.add_argument("--always-trace", "--always", action="store_true")
+    parser.add_argument("-s", "--sort", action="store_true")
+    parser.add_argument("-r", "--reverse", action="store_true")
+    parser.add_argument("xml_file", type=argparse.FileType("r"), nargs="?")
+    parsed = parser.parse_args()
+
+    xml_file = parsed.xml_file
+    character_name = parsed.character_name
+    cache_name = parsed.cache_name
+    sleep_interval = parsed.sleep_interval
+    sleep_duration = parsed.sleep_duration
+    suppress_known = not parsed.always_trace
+    do_sort = parsed.sort
+    sort_reverse = parsed.reverse
+
+    xml_contents = xml_file.read()
+
+    json_dump_skills_from_fits_xml(
+        xml_contents,
+        cache_name,
+        sleep_interval=sleep_interval,
+        sleep_seconds=sleep_duration,
+        suppress_known=suppress_known,
+    )
+
+    if parsed.skills:
+        skills = skills_from_fits_xml(xml_contents, cache_name=cache_name)
+        for s in skills:
+            print(json.dumps(s))
+
+    elif parsed.missing:
+        if not character_name:
+            raise ValueError("Must provide --character-name if --missing provided")
+
+        comparison = compare_fits_from_cache(r, character_name, cache_name)
+
+        if do_sort:
+            itr = sorted(
+                comparison,
+                key=lambda x: x.get("missing_sp"),
+                reverse=sort_reverse,
+            )
+        else:
+            itr = comparison
+
+        for c in itr:
+            print(json.dumps(c))
+
+    elif parsed.histogram:
+        fits = skills_from_fits_xml(xml_contents, cache_name=cache_name)
+
+        histogram = Counter()
+        for fit_entry in fits:
+            for skill in fit_entry.get("skills", []):
+                histogram.update([f"{skill['name']} {skill['level']}"])
+
+        if sort_reverse:
+            listing = reversed(histogram.most_common())
+        else:
+            listing = histogram.most_common()
+
+        for (skill, count) in listing:
+            print(f"{count} {skill}")
+
+    elif parsed.missing_histogram:
+        if not character_name:
+            raise ValueError("Must provide --character-name if --missing provided")
+
+        comparison = compare_fits_from_cache(r, character_name, cache_name)
+
+        histogram = Counter()
+        for fit_entry in comparison:
+            for skill_entry in fit_entry.get("missing_skills", []):
+                histogram.update([skill_entry["skill"]])
+
+        if sort_reverse:
+            listing = reversed(histogram.most_common())
+        else:
+            listing = histogram.most_common()
+
+        for (skill, count) in listing:
+            print(f"{count} {skill}")
+
+    else:
+        print("No output requested")
+
+
 if __name__ == "__main__":
-    #print(json.dumps(compare_fits_from_cache(r, "Mola Pavonis", "doctrine_fits")))
-    json_dump_skills_from_fits_xml(open("fittings.xml").read())
+    main()
