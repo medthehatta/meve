@@ -373,6 +373,17 @@ def main():
             "occurrence"
         ),
     )
+    parser.add_argument(
+        "--list-fits",
+        "--list",
+        action="store_true",
+        help="List the fit names in the XML",
+    )
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        help="Just perform an OIDC login and save the token",
+    )
     parser.add_argument("--purge", action="store_true")
     parser.add_argument("-c", "--character-name", "--character")
     parser.add_argument("-C", "--cache-name", "--cache", default="doctrine_fits")
@@ -393,15 +404,18 @@ def main():
     do_sort = parsed.sort
     sort_reverse = parsed.reverse
 
-    xml_contents = xml_file.read()
+    if xml_file:
+        xml_contents = xml_file.read()
+        json_dump_skills_from_fits_xml(
+            xml_contents,
+            cache_name,
+            sleep_interval=sleep_interval,
+            sleep_seconds=sleep_duration,
+            suppress_known=suppress_known,
+        )
 
-    json_dump_skills_from_fits_xml(
-        xml_contents,
-        cache_name,
-        sleep_interval=sleep_interval,
-        sleep_seconds=sleep_duration,
-        suppress_known=suppress_known,
-    )
+    else:
+        xml_contents = ""
 
     if parsed.skills:
         skills = skills_from_fits_xml(xml_contents, cache_name=cache_name)
@@ -460,6 +474,14 @@ def main():
 
         for (skill, count) in listing:
             print(f"{count} {skill}")
+
+    elif parsed.list_fits:
+        fits = components_from_fits_xml(xml_contents)
+        for fit in fits:
+            print(f"{fit['ship']} | {fit['name']}")
+
+    elif parsed.login:
+        r.token.get()
 
     else:
         print("No output requested")
