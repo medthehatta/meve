@@ -5,6 +5,7 @@ import glob
 import itertools
 import datetime
 from pprint import pprint
+import sys
 import pickle
 
 from cytoolz import get
@@ -73,6 +74,12 @@ stacmon_fed = entity.from_name(
 yona_core = entity.from_name(
     "Yona II - Core Complexion Inc. Factory",
 )
+
+e3_mothership = {
+    "entity": Entity(1040278453044, "E3OI-U - Mothership Bellicose"),
+    "type": entity.strict.from_name("Keepstar"),
+    "system": entity.strict.from_name("E3OI-U"),
+}
 
 # k7 = {
 #     "entity": Entity(1043661023026, "K7D-II - Mothership Bellicose"),
@@ -624,18 +631,21 @@ class SheetInterface:
         return dict(zip(ids, entity_orders))
 
     def _fetch_orders_by_name(self, names, max_workers=6):
-        with ThreadPoolExecutor(max_workers=max_workers) as exe:
-            entity_orders = list(
-                exe.map(
-                    lambda x: list(
-                        self.order_fetcher.get_for_regions(
-                            self.entity.strict.from_name(x),
-                            REGIONS,
-                        ),
-                    ),
-                    names,
+
+        def _orders_for_name(x):
+            result = list(
+                self.order_fetcher.get_for_regions(
+                    self.entity.strict.from_name(x),
+                    REGIONS,
                 )
             )
+            print(".", end="", file=sys.stderr, flush=True)
+            return result
+
+        with ThreadPoolExecutor(max_workers=max_workers) as exe:
+            entity_orders = list(exe.map(_orders_for_name, names))
+
+        print("", file=sys.stderr, flush=True)
 
         entity_orders_from_structures = [
             list(
@@ -668,6 +678,9 @@ class SheetInterface:
             "Dodixie Sell p1": market_metric(p1, "sell", location=dodixie_fed),
             "Dodixie Sell p20": market_metric(p20, "sell", location=dodixie_fed),
             "Dodixie Buy Max": market_metric(maximum, "buy", location=dodixie_fed),
+            "E3O Sell p1": market_metric(p1, "sell", location=e3_mothership["entity"]),
+            "E3O Sell p20": market_metric(p20, "sell", location=e3_mothership["entity"]),
+            "E3O Buy Max": market_metric(maximum, "buy", location=e3_mothership["entity"]),
             "Zone Sell p1": market_metric(p1, "sell"),
             "Zone Sell p20": market_metric(p20, "sell"),
             "Zone Buy Max": market_metric(maximum, "buy"),
@@ -1007,13 +1020,16 @@ class SheetInterface:
         )
 
     def update(self):
-        #self.order_fetcher.authed_requester.token.get()
+        if self.structures:
+            self.order_fetcher.authed_requester.token.get()
         print("Updating recipes...")
         self.update_recipes()
         print("Updating invention...")
         self.update_invention()
         print("Updating prices...")
         self.update_prices()
+        print("Updating PI prices...")
+        self.update_pi_prices()
 
     def update_sheet_stuff(self):
         print("Importing transactions...")
@@ -1030,8 +1046,7 @@ class SheetInterface:
         names1 = list(
             set(
                 itertools.chain(
-                    self.spreadsheet.worksheet("PI Recipes").get_values("G1:1")[0],
-                    self._names_from_sheet("PI Recipes", "Name", 1)
+                    self._names_from_sheet("PI Prices", "Item", 1),
                 )
             )
         )
@@ -1195,5 +1210,8 @@ si = SheetInterface(
     industry,
     blueprints,
     station=jita_44,
+    # The numbers we get from ESI are absolute garbage for some reason.  Low
+    # refresh rate and small volumes I suppose?
+    #structures=[e3_mothership["entity"]],
     structures=[],
 )

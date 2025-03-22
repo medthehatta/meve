@@ -344,6 +344,11 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--components",
+        action="store_true",
+        help="Print components required for the provided fits XML",
+    )
+    parser.add_argument(
         "--skills",
         action="store_true",
         help="Print skills required for the provided fits XML",
@@ -417,7 +422,12 @@ def main():
     else:
         xml_contents = ""
 
-    if parsed.skills:
+    if parsed.components:
+        components = components_from_fits_xml(xml_contents)
+        for c in components:
+            print(json.dumps(c))
+
+    elif parsed.skills:
         skills = skills_from_fits_xml(xml_contents, cache_name=cache_name)
         for s in skills:
             print(json.dumps(s))

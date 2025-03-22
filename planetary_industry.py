@@ -6,21 +6,18 @@ class PlanetaryIndustry:
     def suitable_planet(self, mat):
         pass
 
-
     def conversion(self, in_mat, out_mat):
         pass
 
-
     def export_tax_per_unit(self, mat):
         pass
-
 
     def sell_price(self, mat):
         pass
 
 
 def p0_to_p1(pi, p1):
-    p0 = pi.inputs_for(p1)["p0"][0]
+    p0 = pi.inputs_for(p1)[0]
     (x_planet, amt_per_day) = pi.suitable_planet(p0)
 
     # Process
@@ -35,7 +32,17 @@ def p0_to_p1(pi, p1):
     return profit
 
 
-def p0_to_p1_to_p3(p3):
+def p0_to_p1_to_p3(pi, p3):
+    p0 = pi.inputs_for(p1)[0]
+    (x_planet, amt_per_day) = pi.suitable_planet(p0)
+
+    # Process
+    p1_per_day = pi.conversion(p0, p1)
+
+    # Export
+    tax_per_unit = pi.export_tax_per_unit(p1)
+
+
     # Extract
     # Process
     # Export
@@ -46,7 +53,7 @@ def p0_to_p1_to_p3(p3):
     # Sell
 
 
-def p0_to_p2(p2):
+def p0_to_p2(pi, p2):
     # Extract
     # Process
     # Process
@@ -54,7 +61,7 @@ def p0_to_p2(p2):
     # Sell
 
 
-def p0_to_p3_to_p4(p4):
+def p0_to_p3_to_p4(pi, p4):
     # Extract
     # Process
     # Export
@@ -68,7 +75,7 @@ def p0_to_p3_to_p4(p4):
     # Sell
 
 
-def p0_to_p2_to_p4(p4):
+def p0_to_p2_to_p4(pi, p4):
     # Extract
     # Process
     # Process
@@ -78,3 +85,7 @@ def p0_to_p2_to_p4(p4):
     # Process
     # Export
     # Sell
+
+
+
+

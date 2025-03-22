@@ -116,7 +116,6 @@ class OrderFetcher:
             )
             orders_by_key = {}
             for order in orders:
-                print(order)
                 key = (order["type_id"], structure.id)
                 if key not in orders_by_key:
                     orders_by_key[key] = []
