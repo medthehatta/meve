@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
+from functools import wraps
 import glob
 import itertools
 import datetime
@@ -290,14 +291,47 @@ def pctl(k):
         return WeightedSeriesMetrics.percentile(k, x)
     return _pctl
 
-p1 = lambda x: WeightedSeriesMetrics.percentile(1, x) or None
-p10 = lambda x: WeightedSeriesMetrics.percentile(10, x) or None
-p20 = lambda x: WeightedSeriesMetrics.percentile(20, x) or None
-p80 = lambda x: WeightedSeriesMetrics.percentile(80, x) or None
-p90 = lambda x: WeightedSeriesMetrics.percentile(90, x) or None
-average = lambda x: WeightedSeriesMetrics.average(x) or None
-minimum = lambda x: WeightedSeriesMetrics.minimum(x) or None
-maximum = lambda x: WeightedSeriesMetrics.maximum(x) or None
+
+def or_none(func):
+
+    @wraps(func)
+    def _(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except ValueError:
+            return None
+
+    return _
+
+
+def market_metric(aggregate, buy_sell, location=None):
+    def _(what):
+        if buy_sell == "buy":
+            buy_sell_filter = EveMarketMetrics.filter_buy
+        else:
+            buy_sell_filter = EveMarketMetrics.filter_sell
+
+        if location is not None:
+            candidates = EveMarketMetrics.filter_location(
+                location,
+                buy_sell_filter(what),
+            )
+        else:
+            candidates = buy_sell_filter(what)
+
+        return aggregate(EveMarketMetrics.as_series(candidates))
+
+    return _
+
+
+p1 = or_none(lambda x: WeightedSeriesMetrics.percentile(1, x))
+p10 = or_none(lambda x: WeightedSeriesMetrics.percentile(10, x))
+p20 = or_none(lambda x: WeightedSeriesMetrics.percentile(20, x))
+p80 = or_none(lambda x: WeightedSeriesMetrics.percentile(80, x))
+p90 = or_none(lambda x: WeightedSeriesMetrics.percentile(90, x))
+average = or_none(lambda x: WeightedSeriesMetrics.average(x))
+minimum = or_none(lambda x: WeightedSeriesMetrics.minimum(x))
+maximum = or_none(lambda x: WeightedSeriesMetrics.maximum(x))
 
 
 def relevant_sell(entity):
@@ -627,156 +661,19 @@ class SheetInterface:
         return all_orders
 
     def _market_metrics_from_orders(self, lookup, x):
-
-        try:
-            jita_sell_p1 = p1(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        jita_44,
-                        EveMarketMetrics.filter_sell(lookup[x]),
-                    ),
-                ),
-            )
-        except ValueError:
-            jita_sell_p1 = None
-
-        try:
-            jita_sell_p20 = p20(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        jita_44,
-                        EveMarketMetrics.filter_sell(lookup[x]),
-                    ),
-                ),
-            )
-        except ValueError:
-            jita_sell_p20 = None
-
-        try:
-            jita_buy_max = maximum(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_location(
-                        jita_44,
-                        EveMarketMetrics.filter_buy(lookup[x]),
-                    ),
-                ),
-            )
-        except ValueError:
-            jita_buy_max = None
-
-        try:
-            zone_sell_p1 = p1(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_sell(lookup[x]),
-                ),
-            )
-        except ValueError:
-            zone_sell_p1 = None
-
-        try:
-            zone_sell_p20 = p20(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_sell(lookup[x]),
-                ),
-            )
-        except ValueError:
-            zone_sell_p20 = None
-
-        try:
-            zone_buy_max = maximum(
-                EveMarketMetrics.as_series(
-                    EveMarketMetrics.filter_buy(lookup[x]),
-                ),
-            )
-        except ValueError:
-            zone_buy_max = None
-
-        # try:
-        #     k7_sell_p1 = p1(
-        #         EveMarketMetrics.as_series(
-        #             EveMarketMetrics.filter_location(
-        #                 k7["entity"],
-        #                 EveMarketMetrics.filter_sell(lookup[x]),
-        #             ),
-        #         ),
-        #     )
-        # except ValueError:
-        #     k7_sell_p1 = None
-
-        # try:
-        #     k7_sell_p20 = p20(
-        #         EveMarketMetrics.as_series(
-        #             EveMarketMetrics.filter_location(
-        #                 k7["entity"],
-        #                 EveMarketMetrics.filter_sell(lookup[x]),
-        #             ),
-        #         ),
-        #     )
-        # except ValueError:
-        #     k7_sell_p20 = None
-
-        # try:
-        #     k7_buy_max = maximum(
-        #         EveMarketMetrics.as_series(
-        #             EveMarketMetrics.filter_location(
-        #                 k7["entity"],
-        #                 EveMarketMetrics.filter_buy(lookup[x]),
-        #             ),
-        #         ),
-        #     )
-        # except ValueError:
-        #     k7_buy_max = None
-
-        # try:
-        #     drac_sell_p1 = p1(
-        #         EveMarketMetrics.as_series(
-        #             EveMarketMetrics.filter_location(
-        #                 drac["entity"],
-        #                 EveMarketMetrics.filter_sell(lookup[x]),
-        #             ),
-        #         ),
-        #     )
-        # except ValueError:
-        #     drac_sell_p1 = None
-
-        # try:
-        #     drac_sell_p20 = p20(
-        #         EveMarketMetrics.as_series(
-        #             EveMarketMetrics.filter_location(
-        #                 drac["entity"],
-        #                 EveMarketMetrics.filter_sell(lookup[x]),
-        #             ),
-        #         ),
-        #     )
-        # except ValueError:
-        #     drac_sell_p20 = None
-
-        # try:
-        #     drac_buy_max = maximum(
-        #         EveMarketMetrics.as_series(
-        #             EveMarketMetrics.filter_location(
-        #                 drac["entity"],
-        #                 EveMarketMetrics.filter_buy(lookup[x]),
-        #             ),
-        #         ),
-        #     )
-        # except ValueError:
-        #     drac_buy_max = None
-
-        return {
-            "Jita Sell p1": jita_sell_p1,
-            "Jita Sell p20": jita_sell_p20,
-            "Jita Buy Max": jita_buy_max,
-            "Zone Sell p1": zone_sell_p1,
-            "Zone Sell p20": zone_sell_p20,
-            "Zone Buy Max": zone_buy_max,
-            # "K7 Sell p1": k7_sell_p1,
-            # "K7 Sell p20": k7_sell_p20,
-            # "K7 Buy Max": k7_buy_max,
-            # "Drac Sell p1": drac_sell_p1,
-            # "Drac Sell p20": drac_sell_p20,
-            # "Drac Buy Max": drac_buy_max,
+        metrics = {
+            "Jita Sell p1": market_metric(p1, "sell", location=jita_44),
+            "Jita Sell p20": market_metric(p20, "sell", location=jita_44),
+            "Jita Buy Max": market_metric(maximum, "buy", location=jita_44),
+            "Dodixie Sell p1": market_metric(p1, "sell", location=dodixie_fed),
+            "Dodixie Sell p20": market_metric(p20, "sell", location=dodixie_fed),
+            "Dodixie Buy Max": market_metric(maximum, "buy", location=dodixie_fed),
+            "Zone Sell p1": market_metric(p1, "sell"),
+            "Zone Sell p20": market_metric(p20, "sell"),
+            "Zone Buy Max": market_metric(maximum, "buy"),
         }
+        found = lookup[x]
+        return {k: metric(found) for (k, metric) in metrics.items()}
 
     def update_product_ids_from_names(self):
         names = sh.get_col_range(
@@ -1033,7 +930,8 @@ class SheetInterface:
         print("Collecting tech 2 BPCs...")
         product_names = self._names_from_sheet("Products", "Item", 2)
         bpc_names = [
-            name for name in product_names if name.strip().endswith("II")
+            name for name in product_names
+            if self.blueprints.lookup(self.entity.from_name(name))["blueprintDetails"]["techLevel"] == 2
         ]
         invention_records = [
             {
