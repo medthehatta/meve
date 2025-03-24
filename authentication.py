@@ -165,8 +165,6 @@ class OidcFlow(AccessToken):
         refresh_token = self.tokens["refresh_token"]
         return self._request_tokens_with_grant(
             {
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
                 "refresh_token": refresh_token,
                 "grant_type": "refresh_token",
             },
