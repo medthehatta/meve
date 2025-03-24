@@ -494,7 +494,10 @@ def main():
         r.token.get()
 
     else:
-        print("No output requested")
+        # Assume want components
+        components = components_from_fits_xml(xml_contents)
+        for c in components:
+            print(json.dumps(c))
 
 
 if __name__ == "__main__":
