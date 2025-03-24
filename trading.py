@@ -75,11 +75,12 @@ yona_core = entity.from_name(
     "Yona II - Core Complexion Inc. Factory",
 )
 
-e3_mothership = {
+e3_mothership_data = {
     "entity": Entity(1040278453044, "E3OI-U - Mothership Bellicose"),
     "type": entity.strict.from_name("Keepstar"),
     "system": entity.strict.from_name("E3OI-U"),
 }
+e3_mothership = e3_mothership_data["entity"]
 
 # k7 = {
 #     "entity": Entity(1043661023026, "K7D-II - Mothership Bellicose"),
@@ -678,9 +679,9 @@ class SheetInterface:
             "Dodixie Sell p1": market_metric(p1, "sell", location=dodixie_fed),
             "Dodixie Sell p20": market_metric(p20, "sell", location=dodixie_fed),
             "Dodixie Buy Max": market_metric(maximum, "buy", location=dodixie_fed),
-            "E3O Sell p1": market_metric(p1, "sell", location=e3_mothership["entity"]),
-            "E3O Sell p20": market_metric(p20, "sell", location=e3_mothership["entity"]),
-            "E3O Buy Max": market_metric(maximum, "buy", location=e3_mothership["entity"]),
+            "E3O Sell p1": market_metric(p1, "sell", location=e3_mothership),
+            "E3O Sell p20": market_metric(p20, "sell", location=e3_mothership),
+            "E3O Buy Max": market_metric(maximum, "buy", location=e3_mothership),
             "Zone Sell p1": market_metric(p1, "sell"),
             "Zone Sell p20": market_metric(p20, "sell"),
             "Zone Buy Max": market_metric(maximum, "buy"),
@@ -1212,6 +1213,6 @@ si = SheetInterface(
     station=jita_44,
     # The numbers we get from ESI are absolute garbage for some reason.  Low
     # refresh rate and small volumes I suppose?
-    #structures=[e3_mothership["entity"]],
-    structures=[],
+    structures=[e3_mothership],
+    #structures=[],
 )

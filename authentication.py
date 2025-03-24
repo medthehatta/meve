@@ -250,6 +250,3 @@ class EveOnlineFlow(OidcFlow):
             data=grant_data,
             auth=(self.client_id, self.client_secret),
         )
-
-    def _refresh(self):
-        return self._login()
