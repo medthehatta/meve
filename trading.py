@@ -943,9 +943,19 @@ class SheetInterface:
     def update_invention(self):
         print("Collecting tech 2 BPCs...")
         product_names = self._names_from_sheet("Products", "Item", 2)
+
+        def _tech_level(name):
+            entity = self.entity.from_name(name)
+            bprint = self.blueprints.lookup(entity)
+            try:
+                return bprint["blueprintDetails"]["techLevel"]
+            except KeyError:
+                print(f"Couldn't get tech level for '{name}', assuming 1")
+                return 1
+
         bpc_names = [
             name for name in product_names
-            if self.blueprints.lookup(self.entity.from_name(name))["blueprintDetails"]["techLevel"] == 2
+            if _tech_level(name) == 2
         ]
         invention_records = [
             {
