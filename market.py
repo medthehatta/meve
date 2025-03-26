@@ -78,7 +78,7 @@ class OrderFetcher:
         universe,
         requester,
         authed_requester=None,
-        expire=60,
+        expire=300,
         disk_cache=None,
     ):
         self.universe = universe
@@ -168,26 +168,36 @@ class EveMarketMetrics:
     @classmethod
     @curry
     def filter_location(cls, location, orders):
+        if orders is None:
+            return []
         return [
             x for x in orders if x["location_id"] == location.id
         ]
 
     @classmethod
     def filter_buy(cls, orders):
+        if orders is None:
+            return []
         return [x for x in orders if x["is_buy_order"]]
 
     @classmethod
     def filter_sell(cls, orders):
+        if orders is None:
+            return []
         return [x for x in orders if not x["is_buy_order"]]
 
     @classmethod
     def local_buy_series(cls, location, orders):
+        if orders is None:
+            return cls.as_series([])
         return cls.as_series(
             cls.filter_location(location, cls.filter_buy(orders)),
         )
 
     @classmethod
     def local_sell_series(cls, location, orders):
+        if orders is None:
+            return cls.as_series([])
         return cls.as_series(
             cls.filter_location(location, cls.filter_sell(orders)),
         )

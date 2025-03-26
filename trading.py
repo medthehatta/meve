@@ -290,8 +290,6 @@ REGIONS = entity.from_names(
     "Sinq Laison",
     "The Forge",
     "Verge Vendor",
-    "Placid",
-    "Essence",
 )
 
 def pctl(k):
@@ -686,7 +684,7 @@ class SheetInterface:
             "Zone Sell p20": market_metric(p20, "sell"),
             "Zone Buy Max": market_metric(maximum, "buy"),
         }
-        found = lookup[x]
+        found = lookup.get(x)
         return {k: metric(found) for (k, metric) in metrics.items()}
 
     def update_product_ids_from_names(self):
